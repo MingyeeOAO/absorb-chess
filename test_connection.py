@@ -6,34 +6,38 @@ import asyncio
 import websockets
 import json
 
+server = '127.0.0.1:8765 10.2.2.229:8765 chess.harc.qzz.io/ws/'.split()
+
 async def test_connection():
     try:
-        async with websockets.connect("ws://localhost:8765") as websocket:
-            print("✅ Successfully connected to server!")
-            
-            # Test creating a lobby
-            create_message = {
-                "type": "create_lobby",
-                "player_name": "Test Player",
-                "settings": {
-                    "time_control": "10+0",
-                    "ability_system": "enabled"
+        for url in server:
+            print(f'INFO Testing connection for {url}')
+            async with websockets.connect(f"ws://{url}") as websocket:
+                print("✅ Successfully connected to server!")
+
+                # Test creating a lobby
+                create_message = {
+                    "type": "create_lobby",
+                    "player_name": "Test Player",
+                    "settings": {
+                        "time_control": "10+0",
+                        "ability_system": "enabled"
+                    }
                 }
-            }
-            
-            await websocket.send(json.dumps(create_message))
-            print("✅ Sent create lobby message")
-            
-            # Wait for response
-            response = await asyncio.wait_for(websocket.recv(), timeout=5.0)
-            data = json.loads(response)
-            print(f"✅ Received response: {data}")
-            
-            if data.get("type") == "lobby_created":
-                print(f"✅ Lobby created successfully! Code: {data.get('lobby_code')}")
-            else:
-                print(f"❌ Unexpected response: {data}")
-                
+
+                await websocket.send(json.dumps(create_message))
+                print("✅ Sent create lobby message")
+
+                # Wait for response
+                response = await asyncio.wait_for(websocket.recv(), timeout=5.0)
+                data = json.loads(response)
+                print(f"✅ Received response: {data}")
+
+                if data.get("type") == "lobby_created":
+                    print(f"✅ Lobby created successfully! Code: {data.get('lobby_code')}")
+                else:
+                    print(f"❌ Unexpected response: {data}")
+
     except asyncio.TimeoutError:
         print("❌ Connection timed out")
     except ConnectionRefusedError:

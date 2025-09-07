@@ -503,6 +503,7 @@ class GameServer:
         self.draw_offer_history: Dict[str, list] = {}
     
     async def register_client(self, websocket):
+        print('DEBUG connection received.')
         client_id = str(uuid.uuid4())
         self.connected_clients[client_id] = websocket
         
@@ -549,6 +550,8 @@ class GameServer:
             await self.handle_timeout(client_id, websocket)
         elif message_type == 'decline_draw':
             await self.handle_decline_draw(client_id, websocket, data)
+        elif message_type == 'Heartbeat':
+            pass
         else:
             await self.send_error(websocket, f"Unknown message type: {message_type}")
     
@@ -1056,7 +1059,7 @@ async def main():
     server = GameServer()
     print("Chess server starting on ws://localhost:8765")
     
-    async with websockets.serve(server.register_client, "localhost", 8765):
+    async with websockets.serve(server.register_client, "0.0.0.0", 8765):
         await asyncio.Future()  # Run forever
 
 if __name__ == "__main__":

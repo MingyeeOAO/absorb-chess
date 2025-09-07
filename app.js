@@ -86,12 +86,17 @@ class ChessApp {
     async connectWebSocket() {
         return new Promise((resolve, reject) => {
             try {
-                this.websocket = new WebSocket('ws://localhost:8765');
+                this.websocket = new WebSocket('wss://chess.harc.qzz.io/ws/');
                 
                 this.websocket.onopen = () => {
                     console.log('Connected to server');
                     this.updateConnectionStatus(true);
                     resolve();
+                    setInterval(() => {
+                        console.log('Heartbeat 💯')
+                        this.sendMessage({type: 'Heartbeat'});
+                        console.log('ouob');
+                    }, 60000);
                 };
                 
                 this.websocket.onmessage = (event) => {
