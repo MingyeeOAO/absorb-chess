@@ -360,10 +360,10 @@ class ChessApp {
     
     handleMoveMade(data) {
         // Store move info for animation and highlighting
-        if (data && data.from && data.to) {
-            this.lastMoveHighlight = { from: data.from, to: data.to };
+        if (data && data.last_move && data.last_move.from && data.last_move.to) {
+            this.lastMoveHighlight = { from: data.last_move.from, to: data.last_move.to };
             if (this.enableAnimations) {
-                this.animateMove(data.from, data.to);
+                this.animateMove(data.last_move.from, data.last_move.to);
                 // Update game state after animation
                 setTimeout(() => {
                     this.gameState = data.game_state;
