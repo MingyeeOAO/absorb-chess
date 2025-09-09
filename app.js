@@ -276,7 +276,6 @@ class ChessApp {
             const playerName = document.getElementById('player-name-create').value;
             const timeMinutes = parseInt(document.getElementById('time-minutes').value || '0', 10);
             const timeIncrement = parseInt(document.getElementById('time-increment').value || '0', 10);
-            const abilitySystem = document.getElementById('ability-system').value;
             
             this.sendMessage({
                 type: 'create_lobby',
@@ -284,7 +283,6 @@ class ChessApp {
                 settings: {
                     time_minutes: timeMinutes,
                     time_increment_seconds: timeIncrement,
-                    ability_system: abilitySystem
                 }
             });
         } catch (error) {
@@ -437,9 +435,14 @@ class ChessApp {
 
     handleGameFound(data) {
         this.isSearchingGame = false;
-        // Server should automatically create and join a lobby for both players
-        // Just update UI to show we found a game
-        document.getElementById('searching-status').innerHTML = '<p>Opponent found! Starting game...</p>';
+        // Get the assigned color from server
+        if (data.player_color) {
+            this.playerColor = data.player_color;
+            // Update UI to show we found a game and our assigned color
+            document.getElementById('searching-status').innerHTML = '<p>Opponent found! You are playing as ' + this.playerColor + '</p>';
+        } else {
+            document.getElementById('searching-status').innerHTML = '<p>Opponent found! Waiting for game to start...</p>';
+        }
     }
 
     handleSearchCancelled() {
@@ -496,6 +499,12 @@ class ChessApp {
     
     handleGameStarted(data) {
         this.gameState = data.game_state;
+        // Set player color from server data if provided
+        if (data.player_color) {
+            this.playerColor = data.player_color;
+            console.log('Player color set to:', this.playerColor); // Debug log
+        }
+        
         this.showScreen('game-screen');
         this.renderChessBoard();
         this.initializeGameControls();
@@ -503,6 +512,10 @@ class ChessApp {
         // Start local ticking interval
         if (this.clockInterval) clearInterval(this.clockInterval);
         this.clockInterval = setInterval(() => this.updateClocks(), 250);
+
+        // Debug log
+        console.log('Current turn:', this.gameState.current_turn);
+        console.log('My color:', this.playerColor);
     }
     
     handleMoveMade(data) {

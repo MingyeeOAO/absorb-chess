@@ -3,6 +3,7 @@ import websockets
 import json
 import uuid
 import datetime
+import random
 from typing import Dict, List, Optional
 from dataclasses import dataclass, asdict
 from enum import Enum
@@ -1163,13 +1164,21 @@ class GameServer:
                 # Create a lobby code
                 lobby_code = self.generate_lobby_code()
 
+                # Randomly assign colors
+                if random.random() < 0.5:
+                    player1_color = Color.WHITE
+                    player2_color = Color.BLACK
+                else:
+                    player1_color = Color.BLACK
+                    player2_color = Color.WHITE
+
                 # Create lobby with fixed 10+0 settings
                 lobby = Lobby(
                     code=lobby_code,
                     owner_id=client_id,  # First player is owner
                     players=[
-                        Player(client_id, player_name, Color.WHITE, websocket),
-                        Player(opponent_id, opponent_name, Color.BLACK, opponent_ws)
+                        Player(client_id, player_name, player1_color, websocket),
+                        Player(opponent_id, opponent_name, player2_color, opponent_ws)
                     ],
                     game_state=None,
                     settings={'time_minutes': 10, 'time_increment_seconds': 0},
@@ -1181,13 +1190,29 @@ class GameServer:
                 # Notify both players
                 await self.send_message(websocket, {
                     'type': 'search_game_found',
-                    'opponent': opponent_name
+                    'opponent': opponent_name,
+                    'player_color': player1_color.value
                 })
                 await self.send_message(opponent_ws, {
                     'type': 'search_game_found',
-                    'opponent': player_name
+                    'opponent': player_name,
+                    'player_color': player2_color.value
                 })
 
+                # Also send player colors with game_started message
+                game = ChessGame()
+                lobby.game_state = game.get_board_state()
+                
+                # Initialize clocks
+                now_iso = datetime.datetime.utcnow().isoformat() + 'Z'
+                lobby.game_state['clock'] = {
+                    'white_ms': 10 * 60 * 1000,  # 10 minutes
+                    'black_ms': 10 * 60 * 1000,
+                    'increment_ms': 0,
+                    'last_turn_start': now_iso
+                }
+                
+                
                 # Start the game immediately
                 await self.start_game(client_id, websocket, {'auto_matched': True})
                 break
