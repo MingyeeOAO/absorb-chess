@@ -9,6 +9,7 @@ from enum import Enum
 
 # Feature flags
 CANCEL_PROMOTE = False
+CONNECTION_CHECK_TIMEOUT = 40  # seconds
 
 class PieceType(Enum):
     PAWN = "pawn"
@@ -501,6 +502,8 @@ class GameServer:
         self.lobbies: Dict[str, Lobby] = {}
         self.connected_clients: Dict[str, websockets.WebSocketServerProtocol] = {}
         self.draw_offer_history: Dict[str, list] = {}
+        self.last_connection_check: Dict[str, datetime.datetime] = {}  # Track last connection check time
+        self.missed_checks: Dict[str, int] = {}  # Track number of missed checks
     
     async def register_client(self, websocket):
         client_id = str(uuid.uuid4())
@@ -549,10 +552,54 @@ class GameServer:
             await self.handle_timeout(client_id, websocket)
         elif message_type == 'decline_draw':
             await self.handle_decline_draw(client_id, websocket, data)
+        elif message_type == 'connection_check':
+            await self.handle_connection_check(client_id, websocket, data)
         elif message_type == 'Heartbeat':
             pass
         else:
             await self.send_error(websocket, f"Unknown message type: {message_type}")
+            
+    async def handle_connection_check(self, client_id: str, websocket, data: dict):
+        """Handle connection check messages from clients"""
+        # Reset connection check tracking for this client
+        self.last_connection_check[client_id] = datetime.datetime.now()
+        self.missed_checks[client_id] = 0
+        
+        # Find the lobby this client is in
+        current_lobby = None
+        for lobby in self.lobbies.values():
+            if any(p.id == client_id for p in lobby.players):
+                current_lobby = lobby
+                break
+        
+        if current_lobby and current_lobby.game_state and not current_lobby.game_state.get('game_over'):
+            # Send immediate response to confirm connection
+            await self.send_message(websocket, {
+                'type': 'connection_check_response',
+                'timestamp': data.get('timestamp')
+            })
+            
+            # Check if opponent has missed too many checks
+            opponent = next((p for p in current_lobby.players if p.id != client_id), None)
+            if opponent:
+                last_check = self.last_connection_check.get(opponent.id)
+                if last_check:
+                    time_since_last = (datetime.datetime.now() - last_check).total_seconds()
+                    if time_since_last > CONNECTION_CHECK_TIMEOUT:
+                        missed = self.missed_checks.get(opponent.id, 0) + 1
+                        self.missed_checks[opponent.id] = missed
+                        
+                        if missed >= 4:  # 4 missed checks (40 seconds total)
+                            # Declare the disconnected player as lost
+                            game = current_lobby.game_state
+                            game['game_over'] = True
+                            game['winner'] = next(p.color.value for p in current_lobby.players if p.id == client_id)
+                            
+                            await self.broadcast_to_lobby(current_lobby, {
+                                'type': 'game_over',
+                                'reason': 'disconnection',
+                                'game_state': game
+                            })
     
     async def create_lobby(self, client_id: str, websocket, data: dict):
         lobby_code = self.generate_lobby_code()
@@ -1085,9 +1132,24 @@ class GameServer:
         })
     
     async def handle_disconnect(self, client_id: str):
-        # Remove from connected clients
+        # Update connection tracking
+        self.last_connection_check[client_id] = datetime.datetime.now()
+        
+        # Find if client was in a lobby with an active game
+        for lobby in self.lobbies.values():
+            if any(p.id == client_id for p in lobby.players):
+                if lobby.game_state and not lobby.game_state.get('game_over'):
+                    # Start tracking missed checks for possible reconnection
+                    self.missed_checks[client_id] = 0
+                    return
+        
+        # If no active game, clean up normally
         if client_id in self.connected_clients:
             del self.connected_clients[client_id]
+        if client_id in self.last_connection_check:
+            del self.last_connection_check[client_id]
+        if client_id in self.missed_checks:
+            del self.missed_checks[client_id]
         
         # Handle lobby cleanup
         await self.leave_lobby(client_id, None, {})

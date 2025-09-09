@@ -89,15 +89,35 @@ class ChessApp {
         return new Promise((resolve, reject) => {
             try {
                 this.websocket = new WebSocket('wss://chess.harc.qzz.io/ws/');
+                this.lastPingTime = Date.now();
+                this.reconnectAttempts = 0;
                 
                 this.websocket.onopen = () => {
                     console.log('Connected to server');
                     this.updateConnectionStatus(true);
                     resolve();
-                    setInterval(() => {
-                        console.log('Heartbeat 💯')
+
+                    // Connection check every 10 seconds
+                    if (this.connectionCheckInterval) {
+                        clearInterval(this.connectionCheckInterval);
+                    }
+                    this.connectionCheckInterval = setInterval(() => {
+                        if (this.gameState && !this.gameState.game_over) {
+                            console.log('Connection check');
+                            this.sendMessage({
+                                type: 'connection_check',
+                                timestamp: Date.now()
+                            });
+                        }
+                    }, 10000);
+
+                    // Heartbeat for general connection
+                    if (this.heartbeatInterval) {
+                        clearInterval(this.heartbeatInterval);
+                    }
+                    this.heartbeatInterval = setInterval(() => {
+                        console.log('Heartbeat 💯');
                         this.sendMessage({type: 'Heartbeat'});
-                        console.log('ouob');
                     }, 60000);
                 };
                 
@@ -108,6 +128,14 @@ class ChessApp {
                 this.websocket.onclose = () => {
                     console.log('Disconnected from server');
                     this.updateConnectionStatus(false);
+                    
+                    // Clear intervals
+                    if (this.connectionCheckInterval) {
+                        clearInterval(this.connectionCheckInterval);
+                    }
+                    if (this.heartbeatInterval) {
+                        clearInterval(this.heartbeatInterval);
+                    }
                 };
                 
                 this.websocket.onerror = (error) => {
@@ -242,6 +270,10 @@ class ChessApp {
             case 'game_over':
                 this.gameState = data.game_state;
                 this.handleGameOver(data.reason);
+                break;
+            case 'connection_check_response':
+                // Reset reconnect attempts when we get a response
+                this.reconnectAttempts = 0;
                 break;
             case 'draw_offered':
                 this.handleDrawOffered(data);
@@ -1160,7 +1192,10 @@ class ChessApp {
     
     showPieceAbilities(abilities) {
         const abilitiesDisplay = document.getElementById('abilities-display');
+        if (!abilitiesDisplay) return; // Skip if element doesn't exist
+        
         abilitiesDisplay.innerHTML = '';
+        if (!abilities) return; // Skip if no abilities provided
         
         abilities.forEach(ability => {
             const abilityElement = document.createElement('div');
