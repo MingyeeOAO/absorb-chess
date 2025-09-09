@@ -1,4 +1,4 @@
-# Chess with Piece Abilities
+# Absorb Chess
 
 A web-based multiplayer chess game where pieces gain abilities by capturing other pieces. When a piece captures another piece, it inherits the movement abilities of the captured piece while retaining its own abilities.
 
@@ -7,7 +7,7 @@ A web-based multiplayer chess game where pieces gain abilities by capturing othe
 - **Multiplayer Support**: Real-time 2-player gameplay via WebSocket
 - **Lobby System**: Create and join games with unique lobby codes
 - **Piece Ability System**: Pieces gain abilities when capturing others
-- **Pawn Promotion**: Promoted pawns retain their existing abilities
+- **Search function**: Find real player opponent online
 - **Modern UI**: Responsive design with real-time updates
 
 ## How to Play
@@ -44,9 +44,11 @@ A web-based multiplayer chess game where pieces gain abilities by capturing othe
    ```
    The server will run on `ws://localhost:8765`
 
+
 ### Frontend Setup
 1. Open `index.html` in a web browser
 2. The game will automatically connect to the server
+3. The frontend will automatically try servers listed in servers (line 103 of app.js). If localhost is unavailable, it will fall back to chess.harc.qzz.io (production server). Update the list if your backend runs on a different port.
 
 ## Project Structure
 
@@ -70,42 +72,12 @@ A web-based multiplayer chess game where pieces gain abilities by capturing othe
 
 ## Technical Details
 
-### WebSocket Messages
-- `create_lobby`: Create new game lobby
-- `join_lobby`: Join existing lobby
-- `start_game`: Start the game (owner only)
-- `move_piece`: Make a chess move
-- `lobby_update`: Broadcast lobby state changes
-- `game_state`: Broadcast game state updates
-
 ### Piece Ability System
 - Each piece has an `abilities` array containing movement types
 - On capture, abilities are merged (no duplicates)
 - Movement validation considers all abilities
 - Visual indicators show piece abilities
 
-## Development
-
-### Adding New Features
-1. Update server logic in `server.py`
-2. Add frontend handling in `app.js`
-3. Update UI in `index.html` and `styles.css`
-4. Test with multiple browser windows
-
-### Testing
-- Open two browser windows to test multiplayer
-- Test lobby creation and joining
-- Verify ability inheritance works correctly
-- Test pawn promotion with abilities
-
-## Future Enhancements
-
-- AI opponent option
-- Spectator mode
-- Game replay system
-- Advanced time controls
-- Custom piece sets
-- Tournament mode
 
 ## License
 

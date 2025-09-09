@@ -26,6 +26,10 @@ class ChessApp {
         document.getElementById('join-lobby-btn').addEventListener('click', () => {
             this.showScreen('join-lobby');
         });
+
+        document.getElementById('search-game-btn').addEventListener('click', () => {
+            this.showScreen('search-game');
+        });
         
         // Back buttons
         document.getElementById('back-to-menu').addEventListener('click', () => {
@@ -67,6 +71,16 @@ class ChessApp {
         document.getElementById('offer-draw-btn').addEventListener('click', () => {
             this.offerDraw();
         });
+
+        // Search game
+        document.getElementById('search-game-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            this.searchGame();
+        });
+
+        document.getElementById('cancel-search').addEventListener('click', () => {
+            this.cancelSearch();
+        });
         
         // Error modal
         document.getElementById('close-error').addEventListener('click', () => {
@@ -86,68 +100,173 @@ class ChessApp {
     }
     
     async connectWebSocket() {
-        return new Promise((resolve, reject) => {
+        const servers = [
+            'ws://localhost:8765',
+            'wss://chess.harc.qzz.io/ws/'
+        ];
+
+        for (const serverUrl of servers) {
             try {
-                this.websocket = new WebSocket('wss://chess.harc.qzz.io/ws/');
-                this.lastPingTime = Date.now();
-                this.reconnectAttempts = 0;
-                
-                this.websocket.onopen = () => {
-                    console.log('Connected to server');
-                    this.updateConnectionStatus(true);
-                    resolve();
-
-                    // Connection check every 10 seconds
-                    if (this.connectionCheckInterval) {
-                        clearInterval(this.connectionCheckInterval);
-                    }
-                    this.connectionCheckInterval = setInterval(() => {
-                        if (this.gameState && !this.gameState.game_over) {
-                            console.log('Connection check');
-                            this.sendMessage({
-                                type: 'connection_check',
-                                timestamp: Date.now()
-                            });
-                        }
-                    }, 10000);
-
-                    // Heartbeat for general connection
-                    if (this.heartbeatInterval) {
-                        clearInterval(this.heartbeatInterval);
-                    }
-                    this.heartbeatInterval = setInterval(() => {
-                        console.log('Heartbeat 💯');
-                        this.sendMessage({type: 'Heartbeat'});
-                    }, 60000);
-                };
-                
-                this.websocket.onmessage = (event) => {
-                    this.handleMessage(JSON.parse(event.data));
-                };
-                
-                this.websocket.onclose = () => {
-                    console.log('Disconnected from server');
-                    this.updateConnectionStatus(false);
-                    
-                    // Clear intervals
-                    if (this.connectionCheckInterval) {
-                        clearInterval(this.connectionCheckInterval);
-                    }
-                    if (this.heartbeatInterval) {
-                        clearInterval(this.heartbeatInterval);
-                    }
-                };
-                
-                this.websocket.onerror = (error) => {
-                    console.error('WebSocket error:', error);
-                    this.showError('Connection failed. Please check if the server is running.');
-                    reject(error);
-                };
+                const isValid = await this.tryValidateServer(serverUrl);
+                if (isValid) {
+                    // Found a working server, establish the real connection
+                    return await this.establishConnection(serverUrl);
+                }
             } catch (error) {
-                this.showError('Failed to connect to server. Please check if the server is running.');
-                reject(error);
+                console.log(`Failed to connect to ${serverUrl}:`, error);
+                continue; // Try next server
             }
+        }
+
+        // All servers failed
+        this.showError('Failed to connect to any server. Please check if the server is running.');
+        throw new Error('No available servers');
+    }
+
+    async tryValidateServer(url) {
+        return new Promise((resolve) => {
+            console.log(`Validating server at ${url}`);
+            const ws = new WebSocket(url);
+            
+            let timeoutId = setTimeout(() => {
+                ws.close();
+                resolve(false);
+            }, 5000);
+
+            ws.onopen = () => {
+                try {
+                    ws.send(JSON.stringify({ type: 'validate_server' }));
+                } catch (error) {
+                    clearTimeout(timeoutId);
+                    ws.close();
+                    resolve(false);
+                }
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'validate_server_response') {
+                        clearTimeout(timeoutId);
+                        ws.close();
+                        resolve(data.isChessServer === true);
+                    }
+                } catch (error) {
+                    clearTimeout(timeoutId);
+                    ws.close();
+                    resolve(false);
+                }
+            };
+
+            ws.onerror = () => {
+                clearTimeout(timeoutId);
+                ws.close();
+                resolve(false);
+            };
+
+            ws.onclose = () => {
+                clearTimeout(timeoutId);
+                resolve(false);
+            };
         });
+    }
+
+    async establishConnection(url) {
+        return new Promise((resolve, reject) => {
+            console.log(`Establishing main connection to ${url}`);
+            this.websocket = new WebSocket(url);
+            this.lastPingTime = Date.now();
+            this.reconnectAttempts = 0;
+            
+            this.websocket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    this.handleMessage(data);
+                } catch (error) {
+                    console.error('Failed to parse message:', error);
+                }
+            };
+
+            this.websocket.onopen = () => {
+                console.log(`Connected to ${url}`);
+                this.updateConnectionStatus(true);
+                
+                // Set up connection check interval
+                if (this.connectionCheckInterval) {
+                    clearInterval(this.connectionCheckInterval);
+                }
+                this.connectionCheckInterval = setInterval(() => {
+                    if (this.gameState && !this.gameState.game_over) {
+                        this.sendMessage({
+                            type: 'connection_check',
+                            timestamp: Date.now()
+                        });
+                    }
+                }, 10000);
+
+                // Set up heartbeat interval
+                if (this.heartbeatInterval) {
+                    clearInterval(this.heartbeatInterval);
+                }
+                this.heartbeatInterval = setInterval(() => {
+                    this.sendMessage({type: 'Heartbeat'});
+                }, 60000);
+
+                resolve();
+            };
+
+            this.websocket.onclose = () => {
+                console.log('Disconnected from server');
+                this.updateConnectionStatus(false);
+                if (this.connectionCheckInterval) {
+                    clearInterval(this.connectionCheckInterval);
+                }
+                if (this.heartbeatInterval) {
+                    clearInterval(this.heartbeatInterval);
+                }
+            };
+
+            this.websocket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                reject(error);
+            };
+   
+            this.websocket.onmessage = (event) => {
+                this.handleMessage(JSON.parse(event.data));
+            };
+                
+        });
+    }
+    
+    async searchGame() {
+        try {
+            await this.connectWebSocket();
+            const playerName = document.getElementById('player-name-search').value;
+            
+            // Show searching status
+            document.getElementById('search-game-form').style.display = 'none';
+            document.getElementById('searching-status').style.display = 'block';
+            this.isSearchingGame = true;
+            
+            this.sendMessage({
+                type: 'search_game',
+                player_name: playerName
+            });
+        } catch (error) {
+            this.showError('Failed to start game search. Please try again.' + error);
+        }
+    }
+
+    cancelSearch() {
+        if (this.isSearchingGame) {
+            this.sendMessage({
+                type: 'cancel_search'
+            });
+            this.isSearchingGame = false;
+            document.getElementById('search-game-form').style.display = 'block';
+            document.getElementById('searching-status').style.display = 'none';
+            this.showScreen('main-menu');
+        }
     }
     
     async createLobby() {
@@ -252,6 +371,15 @@ class ChessApp {
         console.log('Received message:', data);
         
         switch (data.type) {
+            case 'search_game_started':
+                this.handleSearchStarted(data);
+                break;
+            case 'search_game_found':
+                this.handleGameFound(data);
+                break;
+            case 'search_game_cancelled':
+                this.handleSearchCancelled();
+                break;
             case 'lobby_created':
                 this.handleLobbyCreated(data);
                 break;
@@ -300,6 +428,25 @@ class ChessApp {
                 this.showError(data.message);
                 break;
         }
+    }
+    
+    handleSearchStarted(data) {
+        // Search has been acknowledged by server
+        document.getElementById('searching-status').innerHTML = '<p>Searching for opponent...</p><div class="loading-spinner"></div>';
+    }
+
+    handleGameFound(data) {
+        this.isSearchingGame = false;
+        // Server should automatically create and join a lobby for both players
+        // Just update UI to show we found a game
+        document.getElementById('searching-status').innerHTML = '<p>Opponent found! Starting game...</p>';
+    }
+
+    handleSearchCancelled() {
+        this.isSearchingGame = false;
+        document.getElementById('search-game-form').style.display = 'block';
+        document.getElementById('searching-status').style.display = 'none';
+        this.showScreen('main-menu');
     }
     
     handleLobbyCreated(data) {

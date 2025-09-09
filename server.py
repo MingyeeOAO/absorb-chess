@@ -504,6 +504,7 @@ class GameServer:
         self.draw_offer_history: Dict[str, list] = {}
         self.last_connection_check: Dict[str, datetime.datetime] = {}  # Track last connection check time
         self.missed_checks: Dict[str, int] = {}  # Track number of missed checks
+        self.searching_players: Dict[str, tuple] = {}  # Players searching for a game: {client_id: (websocket, name)}
     
     async def register_client(self, websocket):
         client_id = str(uuid.uuid4())
@@ -530,7 +531,16 @@ class GameServer:
     async def process_message(self, client_id: str, websocket, data: dict):
         message_type = data.get('type')
         
-        if message_type == 'create_lobby':
+        if message_type == 'validate_server':
+            await self.send_message(websocket, {
+                'type': 'validate_server_response',
+                'isChessServer': True
+            })
+        elif message_type == 'search_game':
+            await self.handle_search_game(client_id, websocket, data)
+        elif message_type == 'cancel_search':
+            await self.handle_cancel_search(client_id, websocket)
+        elif message_type == 'create_lobby':
             await self.create_lobby(client_id, websocket, data)
         elif message_type == 'join_lobby':
             await self.join_lobby(client_id, websocket, data)
@@ -1131,9 +1141,72 @@ class GameServer:
             'message': error_message
         })
     
+    async def handle_search_game(self, client_id: str, websocket, data: dict):
+        """Handle a request to search for a game"""
+        player_name = data.get('player_name', 'Player')
+
+        # Add player to searching list
+        self.searching_players[client_id] = (websocket, player_name)
+
+        # Notify player that search has started
+        await self.send_message(websocket, {
+            'type': 'search_game_started'
+        })
+
+        # Check for matching opponent
+        for opponent_id, (opponent_ws, opponent_name) in list(self.searching_players.items()):
+            if opponent_id != client_id:
+                # Found an opponent! Remove both from searching
+                del self.searching_players[client_id]
+                del self.searching_players[opponent_id]
+
+                # Create a lobby code
+                lobby_code = self.generate_lobby_code()
+
+                # Create lobby with fixed 10+0 settings
+                lobby = Lobby(
+                    code=lobby_code,
+                    owner_id=client_id,  # First player is owner
+                    players=[
+                        Player(client_id, player_name, Color.WHITE, websocket),
+                        Player(opponent_id, opponent_name, Color.BLACK, opponent_ws)
+                    ],
+                    game_state=None,
+                    settings={'time_minutes': 10, 'time_increment_seconds': 0},
+                    created_at=datetime.datetime.now()
+                )
+
+                self.lobbies[lobby_code] = lobby
+
+                # Notify both players
+                await self.send_message(websocket, {
+                    'type': 'search_game_found',
+                    'opponent': opponent_name
+                })
+                await self.send_message(opponent_ws, {
+                    'type': 'search_game_found',
+                    'opponent': player_name
+                })
+
+                # Start the game immediately
+                await self.start_game(client_id, websocket, {'auto_matched': True})
+                break
+
+    async def handle_cancel_search(self, client_id: str, websocket):
+        """Handle a request to cancel game search"""
+        if client_id in self.searching_players:
+            del self.searching_players[client_id]
+            await self.send_message(websocket, {
+                'type': 'search_game_cancelled'
+            })
+
     async def handle_disconnect(self, client_id: str):
         # Update connection tracking
         self.last_connection_check[client_id] = datetime.datetime.now()
+        
+        # Remove from searching players if they were searching
+        if client_id in self.searching_players:
+            del self.searching_players[client_id]
         
         # Find if client was in a lobby with an active game
         for lobby in self.lobbies.values():
