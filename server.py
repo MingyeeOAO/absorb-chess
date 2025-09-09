@@ -724,7 +724,7 @@ class GameServer:
                     'game_state': lobby.game_state
                 })
                 break
-    
+    #te
     async def move_piece(self, client_id: str, websocket, data: dict):
         # Find lobby and game
         for lobby_code, lobby in self.lobbies.items():
