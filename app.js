@@ -10,6 +10,8 @@ class ChessApp {
         this.gameState = null;
         this.selectedSquare = null;
         this.possibleMoves = [];
+        this.lastMoveHighlight = null; // Track last move for highlighting
+        this.enableAnimations = false; // Animation toggle (false to disable)
         
         this.initializeEventListeners();
         this.showScreen('main-menu');
@@ -325,16 +327,35 @@ class ChessApp {
     }
     
     handleMoveMade(data) {
-        this.gameState = data.game_state;
-        this.renderChessBoard();
-        this.updateMoveHistory();
-        this.updateCurrentTurn();
-        this.updateClocks();
-        this.clearSelection();
-        
-        // Check for game over
-        if (this.gameState.game_over) {
-            this.handleGameOver();
+        // Store move info for animation and highlighting
+        if (data && data.from && data.to) {
+            this.lastMoveHighlight = { from: data.from, to: data.to };
+            if (this.enableAnimations) {
+                this.animateMove(data.from, data.to);
+                // Update game state after animation
+                setTimeout(() => {
+                    this.gameState = data.game_state;
+                    this.renderChessBoard();
+                    this.updateMoveHistory();
+                    this.updateCurrentTurn();
+                    this.updateClocks();
+                    this.clearSelection();
+                    if (this.gameState.game_over) {
+                        this.handleGameOver();
+                    }
+                }, 300);
+            } else {
+                // Update immediately without animation
+                this.gameState = data.game_state;
+                this.renderChessBoard();
+                this.updateMoveHistory();
+                this.updateCurrentTurn();
+                this.updateClocks();
+                this.clearSelection();
+                if (this.gameState.game_over) {
+                    this.handleGameOver();
+                }
+            }
         }
     }
 
@@ -345,7 +366,22 @@ class ChessApp {
     }
 
     handlePromotionApplied(data) {
+        // Update lastMoveHighlight with the promotion move
+        if (data && data.from && data.to) {
+            this.lastMoveHighlight = { from: data.from, to: data.to };
+            // If animations are enabled, animate the promotion move
+            if (this.enableAnimations) {
+                this.animateMove(data.from, data.to);
+            }
+        }
+
+        // Update game state and check for game over
         this.gameState = data.game_state;
+        if (this.gameState.game_over) {
+            this.handleGameOver();
+        }
+
+        // Update the board and UI
         this.renderChessBoard();
         this.updateMoveHistory();
         this.updateCurrentTurn();
@@ -664,6 +700,24 @@ class ChessApp {
                 square.addEventListener('click', () => this.handleSquareClick(row, col));
                 board.appendChild(square);
             }
+        }
+        
+        // Restore last move highlighting if it exists
+        if (this.lastMoveHighlight) {
+            this.restoreLastMoveHighlighting();
+        }
+    }
+    
+    restoreLastMoveHighlighting() {
+        if (!this.lastMoveHighlight) return;
+        
+        const { from, to } = this.lastMoveHighlight;
+        const fromSquare = document.querySelector(`[data-row="${from[0]}"][data-col="${from[1]}"]`);
+        const toSquare = document.querySelector(`[data-row="${to[0]}"][data-col="${to[1]}"]`);
+        
+        if (fromSquare && toSquare) {
+            fromSquare.classList.add('last-move');
+            toSquare.classList.add('last-move');
         }
     }
     
@@ -1020,6 +1074,88 @@ class ChessApp {
         document.querySelectorAll('.chess-square').forEach(square => {
             square.classList.remove('selected');
         });
+    }
+    
+    highlightLastMove(from, to) {
+        this.clearLastMoveHighlighting();
+        const fromSquare = document.querySelector(`[data-row="${from[0]}"][data-col="${from[1]}"]`);
+        const toSquare = document.querySelector(`[data-row="${to[0]}"][data-col="${to[1]}"]`);
+        if (fromSquare) fromSquare.classList.add('last-move');
+        if (toSquare) toSquare.classList.add('last-move');
+    }
+
+    animateMove(from, to) {
+        const fromSquare = document.querySelector(`[data-row="${from[0]}"][data-col="${from[1]}"]`);
+        const toSquare = document.querySelector(`[data-row="${to[0]}"][data-col="${to[1]}"]`);
+        const board = document.getElementById('chess-board');
+        const isBoardRotated = board.classList.contains('rotated');
+
+        if (fromSquare && toSquare) {
+            const piece = fromSquare.querySelector('.chess-piece');
+            if (piece) {
+                // Create clone for animation
+                const movingPiece = piece.cloneNode(true);
+                board.appendChild(movingPiece); // Add to board for absolute positioning
+                
+                // Get exact positions
+                const fromRect = fromSquare.getBoundingClientRect();
+                const toRect = toSquare.getBoundingClientRect();
+                const boardRect = board.getBoundingClientRect();
+
+                // Position the piece absolutely within the board
+                movingPiece.style.position = 'absolute';
+                movingPiece.style.zIndex = '1000';
+                movingPiece.style.margin = '0';
+                movingPiece.style.padding = '0';
+                movingPiece.style.display = 'flex';
+                movingPiece.style.alignItems = 'center';
+                movingPiece.style.justifyContent = 'center';
+                
+                // Set initial position relative to board
+                const startX = fromRect.left - boardRect.left;
+                const startY = fromRect.top - boardRect.top;
+                movingPiece.style.left = startX + 'px';
+                movingPiece.style.top = startY + 'px';
+                movingPiece.style.width = fromRect.width + 'px';
+                movingPiece.style.height = fromRect.height + 'px';
+
+                // Handle piece rotation when board is rotated
+                if (isBoardRotated) {
+                    movingPiece.style.transform = 'rotate(180deg)';
+                }
+
+                // Hide original piece
+                piece.style.opacity = '0';
+
+                // Calculate final position
+                const endX = toRect.left - boardRect.left;
+                const endY = toRect.top - boardRect.top;
+
+                // Animate
+                requestAnimationFrame(() => {
+                    movingPiece.style.transition = 'all 0.3s ease';
+                    if (isBoardRotated) {
+                        movingPiece.style.transform = 'rotate(180deg)';
+                    }
+                    movingPiece.style.left = endX + 'px';
+                    movingPiece.style.top = endY + 'px';
+                });
+
+                // Cleanup after animation
+                setTimeout(() => {
+                    movingPiece.remove();
+                    piece.style.opacity = '1';
+                    this.highlightLastMove(from, to);
+                }, 300);
+            }
+        }
+    }
+
+    clearLastMoveHighlighting() {
+        document.querySelectorAll('.chess-square').forEach(square => {
+            square.classList.remove('last-move');
+        });
+        // Do NOT clear this.lastMoveHighlight here, so highlight persists after board re-render
     }
     
     showPieceAbilities(abilities) {

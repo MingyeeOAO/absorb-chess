@@ -121,10 +121,6 @@
                             <span>Current Turn: </span>
                             <span id="current-turn">White</span>
                         </div>
-                        <div class="clocks">
-                            <span>White: <span id="clock-white">--:--</span></span>
-                            <span>Black: <span id="clock-black">--:--</span></span>
-                        </div>
                         <div class="connection-status">
                             <span id="connection-status">Connected</span>
                         </div>
@@ -137,6 +133,12 @@
                 </div>
                 
                 <div class="game-board-container">
+                    <div class="clocks-container">
+                        <div class="clocks">
+                            <div class="clock white-clock">White: <span id="clock-white">--:--</span></div>
+                            <div class="clock black-clock">Black: <span id="clock-black">--:--</span></div>
+                        </div>
+                    </div>
                     <div id="chess-board" class="chess-board"></div>
                 </div>
                 
@@ -163,7 +165,6 @@
             </div>
         </div>
     </div>
-
     <script src="app.js?5"></script>
 </body>
 </html>

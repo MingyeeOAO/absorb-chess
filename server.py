@@ -503,7 +503,6 @@ class GameServer:
         self.draw_offer_history: Dict[str, list] = {}
     
     async def register_client(self, websocket):
-        print('DEBUG connection received.')
         client_id = str(uuid.uuid4())
         self.connected_clients[client_id] = websocket
         
@@ -773,13 +772,16 @@ class GameServer:
                     # Broadcast move to all players
                     await self.broadcast_to_lobby(lobby, {
                         'type': 'move_made',
-                        'from': from_pos,
-                        'to': to_pos,
+                        'last_move': {
+                            'from': from_pos,
+                            'to': to_pos
+                        },
                         'game_state': lobby.game_state
                     })
                 else:
                     await self.send_error(websocket, "Invalid move")
                 break
+
     async def apply_promotion(self, client_id: str, websocket, data: dict):
         # Find lobby and game
         for lobby_code, lobby in self.lobbies.items():
@@ -796,14 +798,16 @@ class GameServer:
                     await self.send_error(websocket, "Invalid promotion state")
                     return
 
-                # --- Handle Cancel ---
                 if (choice or '').lower() == 'cancel':
                     if not CANCEL_PROMOTE:
                         await self.send_error(websocket, "Promotion cancel disabled")
                         return
+                    # Revert pawn to original square and state
                     orig_row, orig_col = pending.get('from')
+                    # Move piece back
                     game.revert_pawn_after_cancel((row, col), (orig_row, orig_col))
                     game.promotion_pending = None
+                    # No turn switch; player's move is canceled entirely
                     lobby.game_state = game.get_board_state()
                     await self.broadcast_to_lobby(lobby, {
                         'type': 'promotion_canceled',
@@ -811,7 +815,7 @@ class GameServer:
                     })
                     break
 
-                # --- Normal Promotion ---
+                # Apply promotion: replace pawn type with chosen type and abilities
                 mapping = {
                     'queen': PieceType.QUEEN,
                     'rook': PieceType.ROOK,
@@ -823,24 +827,49 @@ class GameServer:
                     await self.send_error(websocket, "Invalid promotion choice")
                     return
 
-                # Replace pawn
+                # Store the original abilities before promotion
+                original_abilities = pawn.abilities.copy()
+                
+                # Apply promotion: change type and add new ability
                 pawn.type = new_type
-                pawn.abilities = [new_type]
+                if new_type not in pawn.abilities:
+                    pawn.abilities.append(new_type)
+                
+                # Check if this was a capture move by looking at the last move in history
+                last_move = game.move_history[-1] if game.move_history else None
+                captured_piece_type = None
+                if last_move and last_move.get('captured'):
+                    captured_piece_type = PieceType(last_move['captured'])
+                    print(f"Promotion with capture: {captured_piece_type.value}")
+                    
+                    # Add captured piece ability if not already present
+                    if captured_piece_type not in pawn.abilities:
+                        pawn.abilities.append(captured_piece_type)
+                        print(f"Added {captured_piece_type.value} ability to promoted piece")
+                    
+                    # Check if king was captured during promotion
+                    if captured_piece_type == PieceType.KING:
+                        print(f"GAME OVER! King captured during promotion!")
+                        game.game_over = True
+                        game.winner = pawn.color
+                
+                # Update the move history to reflect the final piece type after promotion
+                if last_move:
+                    last_move['promoted_to'] = new_type.value
+                    last_move['final_piece'] = new_type.value
+                    last_move['abilities_gained'] = [ability.value for ability in pawn.abilities]
+                    print(f"Updated move history: promoted to {new_type.value} with abilities {[a.value for a in pawn.abilities]}")
+                
                 game.promotion_pending = None
 
-                # --- Update move history ---
-                if game.move_history:
-                    last_move = game.move_history[-1]
-                    last_move['promotion'] = new_type.value
-                    # captured / abilities_gained 已經在 move_piece 時處理過，這裡只補 promotion
+                # After promotion, switch turn (unless game is over)
+                if not game.game_over:
+                    game.current_turn = Color.BLACK if game.current_turn == Color.WHITE else Color.WHITE
 
-                # Switch turn
-                game.current_turn = Color.BLACK if game.current_turn == Color.WHITE else Color.WHITE
-
-                # Update check
+                # Re-evaluate check status after new piece power
                 game._update_check_status()
 
-                # Update clocks
+                # Update clocks: apply increment now to promoter and set last_turn_start
                 clock = lobby.game_state.get('clock') or {}
                 inc_ms = int(clock.get('increment_ms', 0))
                 if (pending['color'] == Color.WHITE.value) or (pending['color'] == 'white'):
@@ -852,10 +881,28 @@ class GameServer:
                 lobby.game_state = game.get_board_state()
                 lobby.game_state['clock'] = clock
 
-                await self.broadcast_to_lobby(lobby, {
-                    'type': 'promotion_applied',
-                    'game_state': lobby.game_state
-                })
+                # Send appropriate message based on game state
+                if game.game_over:
+                    await self.broadcast_to_lobby(lobby, {
+                        'type': 'game_over',
+                        'reason': 'king_captured',
+                        'game_state': lobby.game_state
+                    })
+                else:
+                    # Get the move data from the last move in history
+                    last_move_data = None
+                    if game.move_history:
+                        last_move = game.move_history[-1]
+                        last_move_data = {
+                            'from': last_move['from'],
+                            'to': last_move['to']
+                        }
+                    
+                    await self.broadcast_to_lobby(lobby, {
+                        'type': 'promotion_applied',
+                        'last_move': last_move_data,
+                        'game_state': lobby.game_state
+                    })
                 break
     
     def _reconstruct_game_from_state(self, game_state: dict) -> ChessGame:
