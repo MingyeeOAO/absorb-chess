@@ -506,16 +506,44 @@ class GameServer:
         self.last_connection_check: Dict[str, datetime.datetime] = {}  # Track last connection check time
         self.missed_checks: Dict[str, int] = {}  # Track number of missed checks
         self.searching_players: Dict[str, tuple] = {}  # Players searching for a game: {client_id: (websocket, name)}
+        self.connection_check_tasks = {}  # Track connection check tasks
+        
+    async def start_connection_checker(self, client_id: str, websocket):
+        """Start periodic connection checking for a client"""
+        if client_id in self.connection_check_tasks:
+            # Cancel existing task if any
+            self.connection_check_tasks[client_id].cancel()
+        
+        async def checker():
+            while True:
+                try:
+                    await asyncio.sleep(5)  # Check every 5 seconds
+                    await self.handle_connection_check(client_id, websocket, {})
+                except Exception as e:
+                    print(f"Connection checker error for {client_id}: {str(e)}")
+                    break
+        
+        # Create and store the task
+        task = asyncio.create_task(checker())
+        self.connection_check_tasks[client_id] = task
     
     async def register_client(self, websocket):
         client_id = str(uuid.uuid4())
         self.connected_clients[client_id] = websocket
+        
+        # Start connection checker task
+        task = asyncio.create_task(self.start_connection_checker(client_id, websocket))
+        self.connection_check_tasks[client_id] = task
         
         try:
             await self.handle_client(client_id, websocket)
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:
+            # Cancel connection checker task
+            if client_id in self.connection_check_tasks:
+                self.connection_check_tasks[client_id].cancel()
+                del self.connection_check_tasks[client_id]
             # Clean up when client disconnects
             await self.handle_disconnect(client_id)
     
@@ -565,52 +593,108 @@ class GameServer:
             await self.handle_decline_draw(client_id, websocket, data)
         elif message_type == 'connection_check':
             await self.handle_connection_check(client_id, websocket, data)
+        elif message_type == 'connection_check_response':
+            # Simply update the last check time when we receive a response
+            self.last_connection_check[client_id] = datetime.datetime.now()
+            self.missed_checks[client_id] = 0
         elif message_type == 'Heartbeat':
             pass
         else:
             await self.send_error(websocket, f"Unknown message type: {message_type}")
             
+    async def check_client_connection(self, client_id: str, websocket):
+        """Send connection check to client and wait for response"""
+        try:
+            # Send connection check message
+            timestamp = datetime.datetime.now().isoformat()
+            try:
+                await self.send_message(websocket, {
+                    'type': 'connection_check',
+                    'timestamp': timestamp
+                })
+            except websockets.exceptions.ConnectionClosed:
+                print(f"Connection closed while sending check to {client_id}")
+                return False
+
+            # Start response timer
+            start_time = datetime.datetime.now()
+            last_check_time = self.last_connection_check.get(client_id)
+
+            # Wait up to 5 seconds for a response
+            while (datetime.datetime.now() - start_time).total_seconds() < 5:
+                # Check if we've received a response (updated in process_message)
+                current_check_time = self.last_connection_check.get(client_id)
+                if current_check_time and (not last_check_time or current_check_time > last_check_time):
+                    return True
+                
+                # Brief pause to prevent busy waiting
+                await asyncio.sleep(0.1)
+            
+            # If we get here, we timed out waiting for response
+            print(f"Connection check timeout for {client_id}")
+            return False
+                
+        except Exception as e:
+            print(f"Error checking connection for {client_id}: {str(e)}")
+            return False
+
     async def handle_connection_check(self, client_id: str, websocket, data: dict):
-        """Handle connection check messages from clients"""
-        # Reset connection check tracking for this client
-        self.last_connection_check[client_id] = datetime.datetime.now()
-        self.missed_checks[client_id] = 0
-        
+        """Handle connection check system"""
         # Find the lobby this client is in
         current_lobby = None
+        searching = client_id in self.searching_players
+        
         for lobby in self.lobbies.values():
             if any(p.id == client_id for p in lobby.players):
                 current_lobby = lobby
                 break
         
-        if current_lobby and current_lobby.game_state and not current_lobby.game_state.get('game_over'):
-            # Send immediate response to confirm connection
-            await self.send_message(websocket, {
-                'type': 'connection_check_response',
-                'timestamp': data.get('timestamp')
-            })
-            
-            # Check if opponent has missed too many checks
-            opponent = next((p for p in current_lobby.players if p.id != client_id), None)
-            if opponent:
-                last_check = self.last_connection_check.get(opponent.id)
-                if last_check:
-                    time_since_last = (datetime.datetime.now() - last_check).total_seconds()
-                    if time_since_last > CONNECTION_CHECK_TIMEOUT:
-                        missed = self.missed_checks.get(opponent.id, 0) + 1
-                        self.missed_checks[opponent.id] = missed
-                        
-                        if missed >= 4:  # 4 missed checks (40 seconds total)
-                            # Declare the disconnected player as lost
-                            game = current_lobby.game_state
-                            game['game_over'] = True
-                            game['winner'] = next(p.color.value for p in current_lobby.players if p.id == client_id)
-                            
-                            await self.broadcast_to_lobby(current_lobby, {
-                                'type': 'game_over',
-                                'reason': 'disconnection',
-                                'game_state': game
-                            })
+        if searching:
+            # Handle searching player disconnection
+            if not await self.check_client_connection(client_id, websocket):
+                # Cancel search after 1 missed check
+                if client_id in self.searching_players:
+                    del self.searching_players[client_id]
+                    try:
+                        await self.send_message(websocket, {
+                            'type': 'search_game_cancelled',
+                            'reason': 'disconnected'
+                        })
+                    except websockets.exceptions.ConnectionClosed:
+                        pass
+        
+        elif current_lobby and current_lobby.game_state and not current_lobby.game_state.get('game_over'):
+            # Handle game disconnection
+            response = await self.check_client_connection(client_id, websocket)
+            if not response:
+                missed = self.missed_checks.get(client_id, 0) + 1
+                self.missed_checks[client_id] = missed
+                
+                # Calculate remaining time before auto-resign
+                remaining_checks = 8 - missed
+                remaining_seconds = remaining_checks * 5
+                
+                if missed >= 8:  # 8 missed checks (40 seconds total)
+                    # Declare the disconnected player as lost
+                    game = current_lobby.game_state
+                    game['game_over'] = True
+                    opponent = next((p for p in current_lobby.players if p.id != client_id), None)
+                    if opponent:
+                        game['winner'] = opponent.color.value
+                    
+                    await self.broadcast_to_lobby(current_lobby, {
+                        'type': 'game_over',
+                        'reason': 'disconnection',
+                        'game_state': game
+                    })
+                else:
+                    # Notify about disconnection status
+                    await self.broadcast_to_lobby(current_lobby, {
+                        'type': 'player_disconnected',
+                        'player_id': client_id,
+                        'remaining_seconds': remaining_seconds,
+                        'missed_checks': missed
+                    })
     
     async def create_lobby(self, client_id: str, websocket, data: dict):
         lobby_code = self.generate_lobby_code()

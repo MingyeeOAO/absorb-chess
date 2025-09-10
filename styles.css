@@ -213,6 +213,8 @@ p {
     border-radius: 15px;
     padding: 20px;
     box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+    max-width: 100%;
+    overflow: hidden;
 }
 
 .game-header {
@@ -246,6 +248,7 @@ p {
     border-radius: 15px;
     font-size: 0.9rem;
     font-weight: 600;
+    margin-left: 10px;
 }
 
 .clocks {
@@ -254,14 +257,39 @@ p {
     font-weight: 600;
 }
 
-.connection-status.connected {
+.connection-status.connected,
+.player-connection-status.connected {
     background: #d5f4e6;
     color: #27ae60;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.8rem;
 }
 
-.connection-status.disconnected {
+.connection-status.disconnected,
+.player-connection-status.disconnected {
     background: #fadbd8;
     color: #e74c3c;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 0.8rem;
+}
+
+.player-clock {
+    padding: 10px;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.1);
+}
+
+.player-info {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 5px;
+}
+
+.clock-time {
+    font-size: 1.1em;
 }
 
 .game-board-container {
@@ -302,12 +330,15 @@ p {
 
 .chess-board {
     display: grid;
-    grid-template-columns: repeat(8, 60px);
-    grid-template-rows: repeat(8, 60px);
+    width: min(100%, 480px); /* 60px * 8 squares = 480px max width */
+    aspect-ratio: 8/9; /* Makes the board slightly taller than wide */
+    grid-template-columns: repeat(8, 1fr);
+    grid-template-rows: repeat(8, 1fr);
     border: 3px solid #2c3e50;
     border-radius: 8px;
     overflow: hidden;
     transition: transform 0.3s ease;
+    margin: 0 auto;
 }
 
 .chess-board.rotated {
@@ -319,8 +350,8 @@ p {
 }
 
 .chess-square {
-    width: 60px;
-    height: 60px;
+    width: 100%;
+    height: 100%;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -379,13 +410,36 @@ p {
     100% { box-shadow: inset 0 0 0 3px #cc0000; }
 }
 
+.piece-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
 .chess-piece {
     font-size: 2rem;
     user-select: none;
     pointer-events: none;
     transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
 }
 
+.abilities-container {
+    position: absolute;
+    width: 90%;
+    height: 25%;
+    display: flex;
+    gap: 2%;
+    justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    left: 5%;
+    bottom: 0;
+}
 .chess-piece.moving {
     position: absolute;
     z-index: 1000;
@@ -506,22 +560,16 @@ p {
     }
     
     .game-board-container {
-        overflow-x: auto;
-        justify-content: flex-start;
-        -webkit-overflow-scrolling: touch;
-        padding: 10px 0;
+        width: 100%;
+        padding: 10px;
     }
 
     .chess-board {
-        grid-template-columns: repeat(8, 45px);
-        grid-template-rows: repeat(8, 45px);
-        margin: 0 auto;
+        width: min(100%, 360px); /* Smaller max size on mobile */
     }
     
     .chess-square {
-        width: 45px;
-        height: 45px;
-        font-size: 1.8rem;
+        font-size: 1.5rem; /* Slightly smaller font on mobile */
     }
     
     .chess-piece {

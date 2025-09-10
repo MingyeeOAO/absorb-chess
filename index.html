@@ -74,6 +74,7 @@
                 <div id="searching-status" style="display: none;">
                     <p>Searching for opponent...</p>
                     <div class="loading-spinner"></div>
+                    <button type="button" id="cancel-searching" class="btn btn-secondary">Cancel Search</button>
                 </div>
             </div>
         </div>
@@ -153,8 +154,20 @@
                 <div class="game-board-container">
                     <div class="clocks-container">
                         <div class="clocks">
-                            <div class="clock white-clock">White: <span id="clock-white">--:--</span></div>
-                            <div class="clock black-clock">Black: <span id="clock-black">--:--</span></div>
+                            <div class="player-clock white-clock">
+                                <div class="player-info">
+                                    <span id="white-player-name">White</span>
+                                    <span id="white-connection-status" class="player-connection-status connected">Connected</span>
+                                </div>
+                                <div class="clock-time">Time: <span id="clock-white">--:--</span></div>
+                            </div>
+                            <div class="player-clock black-clock">
+                                <div class="player-info">
+                                    <span id="black-player-name">Black</span>
+                                    <span id="black-connection-status" class="player-connection-status connected">Connected</span>
+                                </div>
+                                <div class="clock-time">Time: <span id="clock-black">--:--</span></div>
+                            </div>
                         </div>
                     </div>
                     <div id="chess-board" class="chess-board"></div>
@@ -180,6 +193,14 @@
                 <h3>Error</h3>
                 <p id="error-message"></p>
                 <button id="close-error" class="btn btn-primary">OK</button>
+            </div>
+        </div>
+
+        <!-- Connection Warning -->
+        <div id="connection-warning" class="connection-warning hidden">
+            <div class="warning-content">
+                <span class="warning-text"></span>
+                <div class="countdown"></div>
             </div>
         </div>
     </div>

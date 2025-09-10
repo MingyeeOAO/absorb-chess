@@ -12,9 +12,19 @@ class ChessApp {
         this.possibleMoves = [];
         this.lastMoveHighlight = null; // Track last move for highlighting
         this.enableAnimations = false; // Animation toggle (false to disable)
+        this.currentTextureSet = 'classic';
+        this.pieceImages = null;
+        this.disconnectionTimer = null;
+        this.disconnectionWarning = null;
+        this.lastConnectionCheck = Date.now();
+        this.missedChecks = 0;
+        this.disconnectionTimer = null;
+        this.disconnectionCountdown = null;
         
         this.initializeEventListeners();
-        this.showScreen('main-menu');
+        this.loadTextureSet('classic').then(() => {
+            this.showScreen('main-menu');
+        });
     }
     
     initializeEventListeners() {
@@ -369,6 +379,18 @@ class ChessApp {
         console.log('Received message:', data);
         
         switch (data.type) {
+            case 'connection_check':
+                // Respond immediately to connection check
+                this.sendMessage({
+                    type: 'connection_check_response',
+                    timestamp: data.timestamp
+                });
+                break;
+            
+            case 'player_disconnected':
+                this.handlePlayerDisconnection(data);
+                break;
+            
             case 'search_game_started':
                 this.handleSearchStarted(data);
                 break;
@@ -503,6 +525,19 @@ class ChessApp {
         if (data.player_color) {
             this.playerColor = data.player_color;
             console.log('Player color set to:', this.playerColor); // Debug log
+        }
+        
+        // Set player names from lobby data
+        if (this.lobbyData && this.lobbyData.players) {
+            const whitePlayer = this.lobbyData.players.find(p => p.color === 'white');
+            const blackPlayer = this.lobbyData.players.find(p => p.color === 'black');
+            
+            if (whitePlayer) {
+                document.getElementById('white-player-name').textContent = whitePlayer.name;
+            }
+            if (blackPlayer) {
+                document.getElementById('black-player-name').textContent = blackPlayer.name;
+            }
         }
         
         this.showScreen('game-screen');
@@ -879,10 +914,7 @@ class ChessApp {
                 square.dataset.col = col;
                 
                 if (piece) {
-                    const pieceElement = document.createElement('div');
-                    pieceElement.className = 'chess-piece';
-                    pieceElement.textContent = this.getPieceSymbol(piece.type, piece.color);
-                    pieceElement.dataset.abilities = JSON.stringify(piece.abilities);
+                    const pieceElement = this.getPieceElement(piece.type, piece.color, piece.abilities);
                     square.appendChild(pieceElement);
                 }
                 
@@ -913,16 +945,113 @@ class ChessApp {
         }
     }
     
-    getPieceSymbol(type, color) {
-        const symbols = {
-            'pawn': { 'white': '♙', 'black': '♟' },
-            'rook': { 'white': '♖', 'black': '♜' },
-            'knight': { 'white': '♘', 'black': '♞' },
-            'bishop': { 'white': '♗', 'black': '♝' },
-            'queen': { 'white': '♕', 'black': '♛' },
-            'king': { 'white': '♔', 'black': '♚' }
+    async loadTextureSet(textureSet = 'classic') {
+        this.currentTextureSet = textureSet;
+        this.pieceImages = {
+            'pawn': { 'white': null, 'black': null },
+            'rook': { 'white': null, 'black': null },
+            'knight': { 'white': null, 'black': null },
+            'bishop': { 'white': null, 'black': null },
+            'queen': { 'white': null, 'black': null },
+            'king': { 'white': null, 'black': null }
         };
-        return symbols[type]?.[color] || '?';
+
+        const loadImage = (src) => {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = () => reject(new Error(`Failed to load image: ${src}`));
+                img.src = src;
+            });
+        };
+
+        try {
+            for (const type in this.pieceImages) {
+                for (const color in this.pieceImages[type]) {
+                    const path = `resources/pieces/${textureSet}/${type}_${color}.png`;
+                    this.pieceImages[type][color] = await loadImage(path);
+                }
+            }
+            console.log(`Loaded texture set: ${textureSet}`);
+            return true;
+        } catch (error) {
+            console.error('Failed to load texture set:', error);
+            return false;
+        }
+    }
+
+    getPieceElement(type, color, abilities = []) {
+        const pieceContainer = document.createElement('div');
+        pieceContainer.className = 'piece-container';
+        
+        const pieceElement = document.createElement('div');
+        pieceElement.className = 'chess-piece';
+        
+        if (this.pieceImages?.[type]?.[color]) {
+            // Create an img element if we have the image loaded
+            const img = document.createElement('img');
+            img.src = this.pieceImages[type][color].src;
+            img.alt = `${color} ${type}`;
+            
+            // Make piece size relative to square size
+            img.style.width = '80%';  // Use percentage of square size
+            img.style.height = '80%';
+            img.style.display = 'block';
+            img.style.objectFit = 'contain';
+            pieceElement.appendChild(img);
+        } else {
+            // Fallback to unicode symbols if images aren't loaded
+            const symbols = {
+                'pawn': { 'white': '♙', 'black': '♟' },
+                'rook': { 'white': '♖', 'black': '♜' },
+                'knight': { 'white': '♘', 'black': '♞' },
+                'bishop': { 'white': '♗', 'black': '♝' },
+                'queen': { 'white': '♕', 'black': '♛' },
+                'king': { 'white': '♔', 'black': '♚' }
+            };
+            pieceElement.textContent = symbols[type]?.[color] || '?';
+        }
+
+        // Add abilities container
+        if (abilities && abilities.length > 0) {
+            const abilitiesContainer = document.createElement('div');
+            abilitiesContainer.className = 'abilities-container';
+            
+            // Handle rotation for black player's view
+            if (this.playerColor === 'black') {
+                abilitiesContainer.style.transform = 'rotate(180deg)';
+                abilitiesContainer.style.bottom = 'auto';
+                abilitiesContainer.style.top = '0';
+            }
+
+            // Filter out the piece's own type from abilities
+            const extraAbilities = abilities.filter(ability => ability.toLowerCase() !== type.toLowerCase());
+
+            // Add ability icons
+            extraAbilities.forEach(ability => {
+                if (this.pieceImages?.[ability.toLowerCase()]?.[color]) {
+                    const abilityIcon = document.createElement('img');
+                    abilityIcon.src = this.pieceImages[ability.toLowerCase()][color].src;
+                    abilityIcon.alt = ability;
+                    abilityIcon.style.height = '100%';
+                    abilityIcon.style.width = '20%'; // Space for 5 icons with gaps
+                    abilityIcon.style.opacity = '0.9';
+                    abilityIcon.style.objectFit = 'contain';
+                    abilitiesContainer.appendChild(abilityIcon);
+                }
+            });
+
+            if (extraAbilities.length > 0) {
+                pieceContainer.appendChild(pieceElement);
+                pieceContainer.appendChild(abilitiesContainer);
+            } else {
+                pieceContainer.appendChild(pieceElement);
+            }
+        } else {
+            pieceContainer.appendChild(pieceElement);
+        }
+        
+        return pieceContainer;
     }
     
     handleSquareHover(e, row, col) {
@@ -1407,6 +1536,63 @@ class ChessApp {
     hideError() {
         document.getElementById('error-modal').classList.remove('active');
     }
+
+    handlePlayerDisconnection(data) {
+        const remainingSeconds = data.remaining_seconds;
+        const missedChecks = data.missed_checks;
+        const playerId = data.player_id;
+
+        // Update opponent's connection status
+        if (this.currentScreen === 'game-screen') {
+            const opponentColor = this.playerColor === 'white' ? 'black' : 'white';
+            const playerClockDiv = document.querySelector(`.${opponentColor}-clock`);
+            
+            // Update connection status
+            const statusElement = document.getElementById(`${opponentColor}-connection-status`);
+            if (statusElement) {
+                statusElement.textContent = 'Disconnected';
+                statusElement.classList.remove('connected');
+                statusElement.classList.add('disconnected');
+            }
+
+            // Create or update disconnection status under timer
+            let disconnectionStatus = playerClockDiv.querySelector('.disconnection-status');
+            if (!disconnectionStatus) {
+                disconnectionStatus = document.createElement('div');
+                disconnectionStatus.className = 'disconnection-status';
+                playerClockDiv.appendChild(disconnectionStatus);
+            }
+
+            // Update countdown
+            if (this.disconnectionTimer) {
+                clearInterval(this.disconnectionTimer);
+            }
+
+            let remainingTime = remainingSeconds;
+            const updateCountdown = () => {
+                disconnectionStatus.textContent = `Will auto-resign in ${remainingTime} seconds`;
+                remainingTime--;
+                if (remainingTime < 0) {
+                    clearInterval(this.disconnectionTimer);
+                    disconnectionStatus.remove();
+                }
+            };
+
+            updateCountdown();
+            this.disconnectionTimer = setInterval(updateCountdown, 1000);
+        }
+    }
+
+    handleSearchDisconnected() {
+        // If we're searching and get disconnected, cancel search and show error
+        if (this.currentScreen === 'search-game' || this.isSearchingGame) {
+            this.isSearchingGame = false;
+            document.getElementById('search-game-form').style.display = 'block';
+            document.getElementById('searching-status').style.display = 'none';
+            this.showScreen('main-menu');
+            this.showError('Search cancelled due to connection issues');
+        }
+    }
     
     resetLobbyState() {
         this.currentLobby = null;
@@ -1419,6 +1605,74 @@ class ChessApp {
     initializeGameControls() {
         // Initialize any game-specific controls
         this.updateMoveHistory();
+    }
+
+    checkConnection() {
+        if (!this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
+            this.handleDisconnection();
+        }
+    }
+
+    handleDisconnection() {
+        // Update connection status
+        this.updateConnectionStatus(false);
+
+        // Handle search disconnection
+        if (this.currentScreen === 'search-game') {
+            this.showError('Lost connection to server. Please try again.');
+            this.showScreen('main-menu');
+            return;
+        }
+
+        // Handle game disconnection
+        if (this.currentScreen === 'game-screen') {
+            const playerStatus = this.playerColor === 'white' ? 
+                document.getElementById('white-connection-status') : 
+                document.getElementById('black-connection-status');
+            
+            if (playerStatus) {
+                playerStatus.className = 'player-connection-status disconnected';
+                playerStatus.textContent = 'Disconnected';
+            }
+
+            // Start disconnect timer if not already started
+            if (!this.disconnectTimer) {
+                this.disconnectTimeLeft = 40;
+                this.disconnectTimer = setInterval(() => {
+                    this.disconnectTimeLeft--;
+                    playerStatus.textContent = `Disconnected (Auto resign in ${this.disconnectTimeLeft}s)`;
+                    
+                    if (this.disconnectTimeLeft <= 0) {
+                        clearInterval(this.disconnectTimer);
+                        this.disconnectTimer = null;
+                        this.resign();
+                    }
+                }, 1000);
+            }
+        }
+    }
+
+    reconnectPlayer() {
+        if (this.currentScreen === 'game-screen') {
+            const playerStatus = this.playerColor === 'white' ? 
+                document.getElementById('white-connection-status') : 
+                document.getElementById('black-connection-status');
+            
+            if (playerStatus) {
+                playerStatus.className = 'player-connection-status connected';
+                playerStatus.textContent = 'Connected';
+            }
+
+            if (this.disconnectTimer) {
+                clearInterval(this.disconnectTimer);
+                this.disconnectTimer = null;
+            }
+        }
+    }
+
+    updatePlayerNames(whiteName, blackName) {
+        document.getElementById('white-player-name').textContent = whiteName;
+        document.getElementById('black-player-name').textContent = blackName;
     }
 }
 
