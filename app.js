@@ -91,7 +91,8 @@ class ChessApp {
         });
 
         document.getElementById('cancel-search').addEventListener('click', () => {
-            this.cancelSearch();
+            // This handles cancel before search starts - just go back to main menu
+            this.showScreen('main-menu');
         });
         
         // Error modal
@@ -105,6 +106,13 @@ class ChessApp {
         document.querySelectorAll('.screen').forEach(screen => {
             screen.classList.remove('active');
         });
+        
+        // Reset search UI when showing search screen
+        if (screenName === 'search-game') {
+            this.isSearchingGame = false;
+            document.getElementById('search-game-form').style.display = 'block';
+            document.getElementById('searching-status').style.display = 'none';
+        }
         
         // Show target screen
         document.getElementById(screenName).classList.add('active');
@@ -273,15 +281,22 @@ class ChessApp {
     }
 
     cancelSearch() {
-        if (this.isSearchingGame) {
+        // Reset search state regardless of current state
+        this.isSearchingGame = false;
+        
+        // Send cancel message if we were actually searching
+        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
             this.sendMessage({
                 type: 'cancel_search'
             });
-            this.isSearchingGame = false;
-            document.getElementById('search-game-form').style.display = 'block';
-            document.getElementById('searching-status').style.display = 'none';
-            this.showScreen('main-menu');
         }
+        
+        // Reset UI to initial state
+        document.getElementById('search-game-form').style.display = 'block';
+        document.getElementById('searching-status').style.display = 'none';
+        
+        // Go back to main menu
+        this.showScreen('main-menu');
     }
     
     async createLobby() {
@@ -465,7 +480,18 @@ class ChessApp {
     }
 
     handleGameFound(data) {
+        // Only handle if we're actually searching
+        if (!this.isSearchingGame) {
+            console.log('Received game found but not searching - ignoring stale message');
+            return;
+        }
+        
         this.isSearchingGame = false;
+        
+        // Store lobby data from search result
+        this.currentLobby = data.lobby_code;
+        this.playerId = data.player_id;
+        
         // Get the assigned color from server
         if (data.player_color) {
             this.playerColor = data.player_color;
@@ -529,20 +555,43 @@ class ChessApp {
     }
     
     handleGameStarted(data) {
+        // Only proceed if we expect a game to start (either searching, in lobby, or have current lobby)
+        if (!this.isSearchingGame && !this.currentLobby && !this.lobbyData) {
+            console.log('Received game started but not in expected state - ignoring stale message');
+            return;
+        }
+        
         this.gameState = data.game_state;
+        
         // Set player color from server data if provided
         if (data.player_color) {
             this.playerColor = data.player_color;
             console.log('Player color set to:', this.playerColor); // Debug log
         }
         
+        // Store lobby data for player names
+        if (data.lobby_data) {
+            this.lobbyData = data.lobby_data;
+        }
+        
         // Extract and cache valid moves from game state
         this.updateValidMovesFromGameState();
         
-        // Set player names from lobby data
+        // Set player names from lobby data or game state
         if (this.lobbyData && this.lobbyData.players) {
             const whitePlayer = this.lobbyData.players.find(p => p.color === 'white');
             const blackPlayer = this.lobbyData.players.find(p => p.color === 'black');
+            
+            if (whitePlayer) {
+                document.getElementById('white-player-name').textContent = whitePlayer.name;
+            }
+            if (blackPlayer) {
+                document.getElementById('black-player-name').textContent = blackPlayer.name;
+            }
+        } else if (this.gameState && this.gameState.players) {
+            // Fallback to game state player names
+            const whitePlayer = this.gameState.players.find(p => p.color === 'white');
+            const blackPlayer = this.gameState.players.find(p => p.color === 'black');
             
             if (whitePlayer) {
                 document.getElementById('white-player-name').textContent = whitePlayer.name;
@@ -855,6 +904,18 @@ class ChessApp {
         
         // Reset game state
         this.resetGameState();
+        
+        // Reset search state to prevent stale "game found" messages
+        this.isSearchingGame = false;
+        this.currentLobby = null;
+        this.lobbyData = null;
+        this.playerId = null;
+        this.playerColor = null;
+        this.isOwner = false;
+        
+        // Reset search UI
+        document.getElementById('search-game-form').style.display = 'block';
+        document.getElementById('searching-status').style.display = 'none';
         
         // Go back to main menu
         this.showScreen('main-menu');

@@ -189,7 +189,13 @@ class LobbyHandler:
                     response = {
                         'type': 'game_started',
                         'game_state': lobby.game_state,
-                        'player_color': player.color.value
+                        'player_color': player.color.value,
+                        'lobby_data': {
+                            'players': [{'id': p.id, 'name': p.name, 'color': p.color.value} 
+                                       for p in lobby.players],
+                            'settings': lobby.settings,
+                            'lobby_code': lobby.code
+                        }
                     }
                     await self.connection_manager.send_message(player.websocket, response)
                 

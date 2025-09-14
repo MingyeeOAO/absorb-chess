@@ -2,12 +2,13 @@ import asyncio
 import datetime
 from dataclasses import asdict
 from server.core.game import ChessGame
-from server.core.enums import Color
+from server.core.enums import Color, PieceType
 from server.core.state import GlobalState
 
 class GameHandler:
     def __init__(self):
         self.state = GlobalState.get_instance()
+        self.draw_offer_history = {}  # Track draw offer rate limiting
 
     async def handle_move(self, client_id: str, websocket, game_state: dict, data: dict):
         """Handle a move request"""
@@ -64,6 +65,22 @@ class GameHandler:
         if game.move_piece(from_pos, to_pos):
             print(f"Move successful! Turn after move: {game.current_turn.value}")
             
+            # Get updated game state
+            new_state = game.get_board_state()
+            print(f"New state current_turn: {new_state['current_turn']}")
+            
+            # Merge clock information
+            if game_state.get('clock'):
+                new_state['clock'] = game_state['clock']
+            
+            # Check for promotion first
+            if game.promotion_pending:
+                # Send promotion pending message
+                return {
+                    'type': 'promotion_pending',
+                    'game_state': new_state
+                }
+            
             # Calculate valid moves for the new state
             valid_moves = game.calculate_moves()
             print(f"Calculated {len(valid_moves)} valid move groups for {game.current_turn.value}")
@@ -74,14 +91,26 @@ class GameHandler:
                 for (row, col), moves in valid_moves.items()
             }
             
-            # Get updated game state
-            new_state = game.get_board_state()
-            print(f"New state current_turn: {new_state['current_turn']}")
             # Always add valid moves to game state for frontend
             new_state['valid_moves'] = client_moves
-            # Merge clock information
-            if game_state.get('clock'):
-                new_state['clock'] = game_state['clock']
+            
+            # Check for game over (checkmate/stalemate)
+            if not valid_moves:
+                reason = None
+                # Check if current turn king is in check
+                if ((new_state.get('current_turn') == 'white' and new_state.get('white_king_in_check')) or 
+                    (new_state.get('current_turn') == 'black' and new_state.get('black_king_in_check'))):
+                    reason = 'checkmate'
+                    new_state['winner'] = 'black' if new_state.get('current_turn') == 'white' else 'white'
+                else:
+                    reason = 'stalemate'
+                    new_state['winner'] = None  
+                return {
+                    'type': 'game_over',
+                    'reason': reason,
+                    'game_state': new_state
+                }
+            
             # Send updated game state and new valid moves
             return {
                 'type': 'move_made',
@@ -172,3 +201,199 @@ class GameHandler:
             'type': 'valid_moves',
             'moves': client_moves
         }
+
+    async def handle_resign(self, client_id: str, websocket):
+        """Handle player resignation"""
+        lobby = self.state.get_lobby_by_client(client_id)
+        if not lobby or not lobby.game_state or lobby.game_state.get('game_over'):
+            return None
+            
+        # Find the resigning player
+        resigning_player = None
+        for player in lobby.players:
+            if player.id == client_id:
+                resigning_player = player
+                break
+                
+        if not resigning_player:
+            return None
+            
+        # Determine winner as the opponent
+        winner_color = 'black' if resigning_player.color.value == 'white' else 'white'
+        
+        # Update game state
+        lobby.game_state['game_over'] = True
+        lobby.game_state['winner'] = winner_color
+        
+        return {
+            'type': 'game_over',
+            'reason': 'resign',
+            'game_state': lobby.game_state
+        }
+
+    async def handle_timeout(self, client_id: str, websocket):
+        """Handle player timeout"""
+        lobby = self.state.get_lobby_by_client(client_id)
+        if not lobby or not lobby.game_state or lobby.game_state.get('game_over'):
+            return None
+            
+        # Winner is opponent of current turn
+        current_turn = lobby.game_state.get('current_turn')
+        winner = 'black' if current_turn == 'white' else 'white'
+        
+        # Update game state
+        lobby.game_state['game_over'] = True
+        lobby.game_state['winner'] = winner
+        
+        return {
+            'type': 'game_over',
+            'reason': 'timeout',
+            'game_state': lobby.game_state
+        }
+
+    async def handle_offer_draw(self, client_id: str, websocket):
+        """Handle draw offer with rate limiting"""
+        now = datetime.datetime.utcnow()
+        
+        # Rate limit: max 3 offers per minute per player
+        history = self.draw_offer_history.setdefault(client_id, [])
+        history = [t for t in history if (now - t).total_seconds() <= 60]
+        self.draw_offer_history[client_id] = history
+        
+        if len(history) >= 3:
+            return {
+                'type': 'draw_offer_rate_limited',
+                'retry_after': 60 - int((now - history[0]).total_seconds())
+            }
+            
+        # Record this offer time
+        history.append(now)
+        self.draw_offer_history[client_id] = history
+        
+        lobby = self.state.get_lobby_by_client(client_id)
+        if not lobby or not lobby.game_state or lobby.game_state.get('game_over'):
+            return None
+            
+        return {
+            'type': 'draw_offered',
+            'from': client_id
+        }
+
+    async def handle_accept_draw(self, client_id: str, websocket):
+        """Handle draw acceptance"""
+        lobby = self.state.get_lobby_by_client(client_id)
+        if not lobby or not lobby.game_state or lobby.game_state.get('game_over'):
+            return None
+            
+        # Update game state
+        lobby.game_state['game_over'] = True
+        lobby.game_state['winner'] = None
+        
+        return {
+            'type': 'game_over',
+            'reason': 'draw',
+            'game_state': lobby.game_state
+        }
+
+    async def handle_decline_draw(self, client_id: str, websocket, data: dict):
+        """Handle draw decline"""
+        return {
+            'type': 'draw_declined',
+            'from': client_id
+        }
+
+    async def handle_promotion_choice(self, client_id: str, websocket, data: dict):
+        """Handle promotion choice"""
+        lobby = self.state.get_lobby_by_client(client_id)
+        if not lobby or not lobby.game_state:
+            return None
+            
+        choice = data.get('choice')
+        if not choice:
+            return None
+            
+        # Reconstruct game from state
+        game = ChessGame()
+        game.load_from_state(lobby.game_state)
+        
+        if not game.promotion_pending:
+            return None
+            
+        if choice.lower() == 'cancel':
+            if lobby.game_state.get('promotion_cancel_allowed'):
+                if game.cancel_promotion():
+                    new_state = game.get_board_state()
+                    # Merge clock information
+                    if lobby.game_state.get('clock'):
+                        new_state['clock'] = lobby.game_state['clock']
+                    
+                    # Update lobby state
+                    lobby.game_state = new_state
+                    
+                    return {
+                        'type': 'promotion_canceled',
+                        'game_state': new_state
+                    }
+            return None
+        
+        # Apply promotion
+        mapping = {
+            'queen': PieceType.QUEEN,
+            'rook': PieceType.ROOK,
+            'bishop': PieceType.BISHOP,
+            'knight': PieceType.KNIGHT
+        }
+        
+        new_type = mapping.get(choice.lower())
+        if not new_type:
+            return None
+            
+        row = game.promotion_pending['row']
+        col = game.promotion_pending['col']
+        from_pos = game.promotion_pending.get('from')
+        
+        if game.apply_promotion(row, col, new_type):
+            # apply_promotion already switches turns, no need to do it again
+            
+            # Calculate valid moves for the new state
+            valid_moves = game.calculate_moves()
+            client_moves = {
+                f"{r},{c}": [(to_row, to_col) for to_row, to_col in moves]
+                for (r, c), moves in valid_moves.items()
+            }
+            
+            new_state = game.get_board_state()
+            new_state['valid_moves'] = client_moves
+            
+            # Merge clock information
+            if lobby.game_state.get('clock'):
+                new_state['clock'] = lobby.game_state['clock']
+            
+            # Update lobby state
+            lobby.game_state = new_state
+            
+            # Check for game over after promotion
+            if not valid_moves:
+                reason = None
+                if ((new_state.get('current_turn') == 'white' and new_state.get('white_king_in_check')) or 
+                    (new_state.get('current_turn') == 'black' and new_state.get('black_king_in_check'))):
+                    reason = 'checkmate'
+                    new_state['winner'] = 'black' if new_state.get('current_turn') == 'white' else 'white'
+                else:
+                    reason = 'stalemate'
+                    new_state['winner'] = None
+                
+                return {
+                    'type': 'game_over',
+                    'reason': reason,
+                    'game_state': new_state
+                }
+                
+            return {
+                'type': 'promotion_applied',
+                'game_state': new_state,
+                'from': from_pos,
+                'to': (row, col)
+            }
+        
+        return None

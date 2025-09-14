@@ -86,16 +86,14 @@ class SearchHandler:
                     # Automatically start the game for both players
                     lobby = self.state.get_lobby(lobby_code)
                     if lobby:
-                        response = await self.lobby_handler.start_game(client_id, websocket, {})
-                        if response:
-                            for player in lobby.players:
-                                await self.connection_manager.send_message(player.websocket, response)
+                        await self.lobby_handler.start_game(client_id, websocket, {})
+                        # start_game method handles sending messages internally, no need for additional messaging
 
     async def handle_cancel_search(self, client_id: str, websocket):
         """Handle a player canceling their search"""
         self.state.remove_searching_player(client_id)
         await self.connection_manager.send_message(websocket, {
-            'type': 'search_cancelled'
+            'type': 'search_game_cancelled'
         })
 
     def get_searching_count(self) -> int:
