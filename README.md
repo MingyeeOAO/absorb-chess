@@ -32,6 +32,60 @@ A web-based multiplayer chess game where pieces gain abilities by capturing othe
 - Python 3.7+
 - Modern web browser
 
+
+## Project Structure
+
+```
+absort chess/
+├── app.js
+├── engine.py
+├── index.html
+├── main.py
+├── README.md
+├── requirements.txt
+├── resources/
+│   └── pieces/
+│       └── classic/
+│           ├── all.png
+│           ├── bishop_black.png
+│           ├── bishop_white.png
+│           ├── king_black.png
+│           ├── king_white.png
+│           ├── knight_black.png
+│           ├── knight_white.png
+│           ├── pawn_black.png
+│           ├── pawn_white.png
+│           ├── queen_black.png
+│           ├── queen_white.png
+│           ├── rook_black.png
+│           ├── rook_white.png
+│           └── README.md
+├── server/
+│   ├── checkers/
+│   │   └── timer_manager.py
+│   ├── core/
+│   │   ├── enums.py
+│   │   ├── game.py
+│   │   ├── models.py
+│   │   ├── piece.py
+│   │   └── state.py
+│   ├── handlers/
+│   │   ├── game_handler.py
+│   │   ├── lobby_handler.py
+│   │   └── search_handler.py
+│   ├── networking/
+│   │   └── connection.py
+│   └── server.py
+├── split_sprites.py
+├── styles.css
+├── test_names.py
+├── test_timeout.py
+└── oldversion/
+    ├── app.js
+    ├── server.py
+    └── styles.css
+```
+
 ### Backend Setup
 1. Install Python dependencies:
    ```bash

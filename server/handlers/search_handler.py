@@ -17,14 +17,20 @@ class SearchHandler:
         """Handle a player searching for a game"""
         player_name = data.get('player_name', 'Player')
 
-        # First, check if player is already in a lobby
+        # Check if player is already in a lobby
         existing_lobby = self.state.get_lobby_by_client(client_id)
         if existing_lobby:
-            await self.connection_manager.send_message(websocket, {
-                'type': 'error',
-                'message': 'Already in a lobby'
-            })
-            return
+            # If the game is over, remove the player from the old lobby to allow new search
+            if existing_lobby.game_state and existing_lobby.game_state.get('game_over'):
+                # Leave the finished lobby
+                await self.lobby_handler.leave_lobby(client_id, websocket)
+            else:
+                # Still in an active game
+                await self.connection_manager.send_message(websocket, {
+                    'type': 'error',
+                    'message': 'Already in a lobby'
+                })
+                return
 
         # Add player to searching list
         self.state.add_searching_player(client_id, websocket, player_name)
