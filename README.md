@@ -46,20 +46,6 @@ absort chess/
 ├── resources/
 │   └── pieces/
 │       └── classic/
-│           ├── all.png
-│           ├── bishop_black.png
-│           ├── bishop_white.png
-│           ├── king_black.png
-│           ├── king_white.png
-│           ├── knight_black.png
-│           ├── knight_white.png
-│           ├── pawn_black.png
-│           ├── pawn_white.png
-│           ├── queen_black.png
-│           ├── queen_white.png
-│           ├── rook_black.png
-│           ├── rook_white.png
-│           └── README.md
 ├── server/
 │   ├── checkers/
 │   │   └── timer_manager.py
