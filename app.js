@@ -1,3 +1,5 @@
+const UNDER_DEVELOPMENT = true;
+
 class ChessApp {
     constructor() {
         this.websocket = null;
@@ -110,14 +112,17 @@ class ChessApp {
     }
     
     async connectWebSocket() {
-        const servers = [
+        var servers = [
             'ws://localhost:8765',
             'wss://chess.harc.qzz.io/ws/'
         ];
+        if(UNDER_DEVELOPMENT == false){
+            servers.remove('ws://localhost:8765');
+        }
 
-        for (const serverUrl of servers) {
+        for (var serverUrl of servers) {
             try {
-                const isValid = await this.tryValidateServer(serverUrl);
+                var isValid = await this.tryValidateServer(serverUrl);
                 if (isValid) {
                     // Found a working server, establish the real connection
                     return await this.establishConnection(serverUrl);
@@ -141,7 +146,7 @@ class ChessApp {
             let timeoutId = setTimeout(() => {
                 ws.close();
                 resolve(false);
-            }, 5000);
+            }, 3000);
 
             ws.onopen = () => {
                 try {
@@ -417,6 +422,7 @@ class ChessApp {
                 break;
             case 'game_over':
                 this.gameState = data.game_state;
+                this.updateValidMovesFromGameState();
                 this.handleGameOver(data.reason);
                 break;
             case 'connection_check_response':
@@ -443,6 +449,9 @@ class ChessApp {
                 break;
             case 'promotion_canceled':
                 this.handlePromotionCanceled(data);
+                break;
+            case 'invalid_move':
+                this.handleInvalidMove(data);
                 break;
             case 'error':
                 this.showError(data.message);
@@ -527,6 +536,9 @@ class ChessApp {
             console.log('Player color set to:', this.playerColor); // Debug log
         }
         
+        // Extract and cache valid moves from game state
+        this.updateValidMovesFromGameState();
+        
         // Set player names from lobby data
         if (this.lobbyData && this.lobbyData.players) {
             const whitePlayer = this.lobbyData.players.find(p => p.color === 'white');
@@ -562,6 +574,7 @@ class ChessApp {
                 // Update game state after animation
                 setTimeout(() => {
                     this.gameState = data.game_state;
+                    this.updateValidMovesFromGameState();
                     this.renderChessBoard();
                     this.updateMoveHistory();
                     this.updateCurrentTurn();
@@ -574,6 +587,7 @@ class ChessApp {
             } else {
                 // Update immediately without animation
                 this.gameState = data.game_state;
+                this.updateValidMovesFromGameState();
                 this.renderChessBoard();
                 this.updateMoveHistory();
                 this.updateCurrentTurn();
@@ -588,8 +602,12 @@ class ChessApp {
 
     handlePromotionPending(data) {
         this.gameState = data.game_state;
+        this.updateValidMovesFromGameState();
         this.renderChessBoard();
-        this.showPromotionModal();
+        // Always show modal if promotion_pending exists in gameState
+        if (this.gameState && this.gameState.promotion_pending) {
+            this.showPromotionModal();
+        }
     }
 
     handlePromotionApplied(data) {
@@ -604,6 +622,7 @@ class ChessApp {
 
         // Update game state and check for game over
         this.gameState = data.game_state;
+        this.updateValidMovesFromGameState();
         if (this.gameState.game_over) {
             this.handleGameOver();
         }
@@ -618,11 +637,43 @@ class ChessApp {
 
     handlePromotionCanceled(data) {
         this.gameState = data.game_state;
+        this.updateValidMovesFromGameState();
         this.renderChessBoard();
         this.clearPromotionModal();
     }
 
+    handleInvalidMove(data) {
+        console.error('Invalid move details:', data);
+        
+        // Build detailed error message
+        let errorMessage = `Invalid Move: ${data.reason}\n\n`;
+        errorMessage += `From: (${data.from[0]},${data.from[1]}) To: (${data.to[0]},${data.to[1]})\n`;
+        errorMessage += `Current Turn: ${data.current_turn}\n\n`;
+        
+        if (data.details && data.details.length > 0) {
+            errorMessage += 'Details:\n';
+            data.details.forEach((detail, index) => {
+                errorMessage += `${index + 1}. ${detail}\n`;
+            });
+        }
+        
+        // Show detailed error in console for debugging
+        console.log('=== INVALID MOVE DEBUG INFO ===');
+        console.log('From:', data.from);
+        console.log('To:', data.to);
+        console.log('Current Turn:', data.current_turn);
+        console.log('Details:', data.details);
+        console.log('===============================');
+        
+        // Show simplified message to user
+        this.toast(`Invalid move: ${data.reason}`);
+        
+        // Clear any pending selection since the move failed
+        this.clearSelection();
+    }
+
     showPromotionModal() {
+        this.clearPromotionModal();
         const modal = document.createElement('div');
         modal.id = 'promotion-modal';
         modal.className = 'modal active';
@@ -659,6 +710,13 @@ class ChessApp {
                 });
             }
         }
+        // Also handle cancel during searching
+        const cancelSearchingBtn = document.getElementById('cancel-searching');
+        if (cancelSearchingBtn) {
+            cancelSearchingBtn.addEventListener('click', () => {
+                this.cancelSearch();
+            });
+        }
     }
 
     clearPromotionModal() {
@@ -682,6 +740,45 @@ class ChessApp {
         document.querySelectorAll('.chess-square').forEach(square => {
             square.style.pointerEvents = 'none';
         });
+    }
+
+    handleValidMoves(data) {
+        // Store all valid moves for each piece
+        this.allValidMoves = new Map();
+        
+        // Convert server moves to our format for each piece
+        for (const [position, moves] of Object.entries(data.moves)) {
+            const [row, col] = position.split(',').map(Number);
+            this.allValidMoves.set(`${row},${col}`, moves.map(move => ({
+                row: move[0],
+                col: move[1]
+            })));
+        }
+        
+        // If a piece is selected, show its moves
+        if (this.selectedSquare) {
+            const key = `${this.selectedSquare.row},${this.selectedSquare.col}`;
+            this.possibleMoves = this.allValidMoves.get(key) || [];
+            this.showPossibleMoves(this.selectedSquare.row, this.selectedSquare.col);
+        }
+    }
+
+    updateValidMovesFromGameState() {
+        // Extract and cache valid moves from game state if available
+        if (this.gameState && this.gameState.valid_moves) {
+            this.allValidMoves = new Map();
+            // Convert server moves to our format for each piece
+            for (const [position, moves] of Object.entries(this.gameState.valid_moves)) {
+                const [row, col] = position.split(',').map(Number);
+                this.allValidMoves.set(`${row},${col}`, moves.map(move => ({
+                    row: move[0],
+                    col: move[1]
+                })));
+            }
+            // Debug print: log all valid moves
+            console.log('Frontend valid_moves:', this.gameState.valid_moves);
+            console.log('Frontend allValidMoves:', this.allValidMoves);
+        }
     }
 
     handleDrawOffered(data) {
@@ -774,15 +871,22 @@ class ChessApp {
         if (this.gameState) {
             const currentTurnElement = document.getElementById('current-turn');
             let turnText = this.gameState.current_turn === 'white' ? 'White' : 'Black';
-            
             // Add check status
             if (this.gameState.white_king_in_check && this.gameState.current_turn === 'white') {
                 turnText += ' (IN CHECK!)';
             } else if (this.gameState.black_king_in_check && this.gameState.current_turn === 'black') {
                 turnText += ' (IN CHECK!)';
             }
-            
             currentTurnElement.textContent = turnText;
+            // Update player names below clocks
+            if (this.gameState && this.gameState.players) {
+                const whiteName = this.gameState.players.find(p => p.color === 'white')?.name || 'White';
+                const blackName = this.gameState.players.find(p => p.color === 'black')?.name || 'Black';
+                const whiteNameEl = document.getElementById('white-player-name');
+                const blackNameEl = document.getElementById('black-player-name');
+                if (whiteNameEl) whiteNameEl.textContent = whiteName;
+                if (blackNameEl) blackNameEl.textContent = blackName;
+            }
         }
     }
 
@@ -1113,14 +1217,18 @@ class ChessApp {
         return piece.color === this.gameState.current_turn;
     }
     
-    selectSquare(row, col) {
+    async selectSquare(row, col) {
         const piece = this.gameState.board[row][col];
         if (piece && this.isCurrentPlayerPiece(piece)) {
             this.selectedSquare = { row, col };
-            this.possibleMoves = this.calculatePossibleMoves(piece, row, col);
             this.highlightSelectedSquare();
-            this.showPossibleMoves(row, col);
             this.showPieceAbilities(piece.abilities);
+            // Clear previous moves
+            this.clearPossibleMoves();
+            // Always use cached valid moves from server
+            const key = `${row},${col}`;
+            this.possibleMoves = this.allValidMoves?.get(key) || [];
+            this.showPossibleMoves(row, col);
         }
     }
     
@@ -1130,6 +1238,9 @@ class ChessApp {
             from: [from.row, from.col],
             to: [to.row, to.col]
         });
+        // Clear selection and cached moves since they will change after the move
+        this.clearSelection();
+        this.allValidMoves = null;
     }
     
     highlightSelectedSquare() {
@@ -1149,8 +1260,16 @@ class ChessApp {
     
     showPossibleMoves(row, col) {
         this.clearPossibleMoves();
+        // Debug print: show possible moves and selected square
+        console.log('showPossibleMoves called for:', row, col);
+        console.log('possibleMoves:', this.possibleMoves);
+        if (!this.possibleMoves || this.possibleMoves.length === 0) {
+            // If no valid moves, show a toast message
+            //this.toast('No valid moves available for this piece');
+            return;
+        }
         
-        // Highlight possible move squares using stored moves
+        // Highlight all possible move squares the same way
         this.possibleMoves.forEach(move => {
             const square = document.querySelector(`[data-row="${move.row}"][data-col="${move.col}"]`);
             if (square) {
@@ -1538,10 +1657,9 @@ class ChessApp {
     }
 
     handlePlayerDisconnection(data) {
-        const remainingSeconds = data.remaining_seconds;
-        const missedChecks = data.missed_checks;
-        const playerId = data.player_id;
-
+        // Get disconnect time and auto-abort time
+        const { playerId, disconnect_time, abort_time } = data;
+        
         // Update opponent's connection status
         if (this.currentScreen === 'game-screen') {
             const opponentColor = this.playerColor === 'white' ? 'black' : 'white';
@@ -1563,18 +1681,22 @@ class ChessApp {
                 playerClockDiv.appendChild(disconnectionStatus);
             }
 
-            // Update countdown
+            // Clear any existing countdown
             if (this.disconnectionTimer) {
                 clearInterval(this.disconnectionTimer);
             }
 
-            let remainingTime = remainingSeconds;
             const updateCountdown = () => {
-                disconnectionStatus.textContent = `Will auto-resign in ${remainingTime} seconds`;
-                remainingTime--;
-                if (remainingTime < 0) {
+                const now = Math.floor(Date.now() / 1000);
+                const remainingTime = Math.max(0, Math.floor(abort_time - now));
+                
+                if (remainingTime > 0) {
+                    disconnectionStatus.textContent = `Auto-abort in ${remainingTime} seconds`;
+                } else {
                     clearInterval(this.disconnectionTimer);
-                    disconnectionStatus.remove();
+                    if (disconnectionStatus) {
+                        disconnectionStatus.remove();
+                    }
                 }
             };
 
