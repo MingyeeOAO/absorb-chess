@@ -1,4 +1,4 @@
-const UNDER_DEVELOPMENT = true;
+const UNDER_DEVELOPMENT = false;
 
 class ChessApp {
     constructor() {
@@ -91,8 +91,12 @@ class ChessApp {
         });
 
         document.getElementById('cancel-search').addEventListener('click', () => {
-            // This handles cancel before search starts - just go back to main menu
-            this.showScreen('main-menu');
+            this.cancelSearch();
+        });
+        
+        // Cancel searching button
+        document.getElementById('cancel-searching').addEventListener('click', () => {
+            this.cancelSearch();
         });
         
         // Error modal
@@ -766,13 +770,6 @@ class ChessApp {
                     this.sendMessage({ type: 'promotion_choice', choice: 'cancel' });
                 });
             }
-        }
-        // Also handle cancel during searching
-        const cancelSearchingBtn = document.getElementById('cancel-searching');
-        if (cancelSearchingBtn) {
-            cancelSearchingBtn.addEventListener('click', () => {
-                this.cancelSearch();
-            });
         }
     }
 
@@ -1757,7 +1754,7 @@ class ChessApp {
                 const remainingTime = Math.max(0, Math.floor(abort_time - now));
                 
                 if (remainingTime > 0) {
-                    disconnectionStatus.textContent = `Auto-abort in ${remainingTime} seconds`;
+                    disconnectionStatus.textContent = `Auto-resign in ${remainingTime} seconds`;
                 } else {
                     clearInterval(this.disconnectionTimer);
                     if (disconnectionStatus) {

@@ -173,20 +173,20 @@ class ConnectionManager:
                 # Just use the lobby_code we captured earlier - much simpler!
                 if lobby_code:
                     lobby = self.state.get_lobby(lobby_code)
-                    print(f"[Auto-Resign] lobby: {lobby}, player: {client_id}")
-                    print(f"[Auto-Resign] using lobby_code: {lobby_code}")
+                    # print(f"[Auto-Resign] lobby: {lobby}, player: {client_id}")
+                    # print(f"[Auto-Resign] using lobby_code: {lobby_code}")
                     
                     # Only resign if game is still active
                     if lobby and lobby.game_state and not lobby.game_state.get('game_over'):
                         response = await self.game_handler.handle_resign(client_id, None, lobby_code)
-                        print(f"[Auto-Resign] handle_resign response: {response}")
+                        # print(f"[Auto-Resign] handle_resign response: {response}")
                         if response:
                             response['reason'] = 'disconnect'
-                            print(f"[Auto-Resign] broadcasting to lobby_code: {lobby_code}")
+                            # print(f"[Auto-Resign] broadcasting to lobby_code: {lobby_code}")
                             await self.broadcast_to_lobby_clients(lobby_code, response)
                 
                 # NOW clean up everything - after auto-resign is complete
-                print(f"[Auto-Resign] Cleaning up client {client_id}")
+                # print(f"[Auto-Resign] Cleaning up client {client_id}")
                 await self.unregister_client(client_id, remove_from_lobby=True)
                 
             except asyncio.CancelledError:
