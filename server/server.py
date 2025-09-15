@@ -15,9 +15,9 @@ class GameServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 8765):
         self.host = host
         self.port = port
-        self.connection_manager = ConnectionManager(message_handler=self.handle_message)
-        self.lobby_handler = LobbyHandler(self.connection_manager)
         self.game_handler = GameHandler()
+        self.connection_manager = ConnectionManager(game_handler=self.game_handler, message_handler=self.handle_message)
+        self.lobby_handler = LobbyHandler(self.connection_manager)
         self.search_handler = SearchHandler(self.connection_manager, self.lobby_handler)
         self.state = GlobalState.get_instance()
         self.timer_manager = TimerManager(self.handle_timeout)

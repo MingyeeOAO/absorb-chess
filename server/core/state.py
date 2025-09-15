@@ -139,7 +139,7 @@ class GlobalState:
 
     async def broadcast_to_clients(self, message: dict, exclude_client_id: str = None):
         """Send a message to all connected clients except the excluded one"""
-        for client_id, websocket in self.connected_clients.items():
+        for client_id, websocket in list(self.connected_clients.items()):
             if client_id != exclude_client_id:
                 try:
                     await websocket.send(json.dumps(message))

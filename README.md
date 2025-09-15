@@ -61,8 +61,9 @@ absort chess/
 │   │   └── search_handler.py
 │   ├── networking/
 │   │   └── connection.py
-│   └── server.py
-├── styles.css
+│   └── server.py
+├── styles.css
+
 ```
 
 ### Backend Setup
@@ -81,7 +82,8 @@ absort chess/
 ### Frontend Setup
 1. Open `index.html` in a web browser
 2. The game will automatically connect to the server
-3. The frontend will automatically try servers listed in servers (line 103 of app.js). If localhost is unavailable, it will fall back to chess.harc.qzz.io (production server). Update the list if your backend runs on a different port.
+3. The frontend will automatically try servers listed in servers (line 103 of app.js). If localhost is unavailable, it will fall back to chess.harc.qzz.io (production server). Update the list if your backend runs on a different port.
+
 
 ## Game Flow
 

@@ -2,7 +2,7 @@
 from typing import List, Tuple, Optional
 import math
 import copy
-from server import *
+from server.core import *
 # --- reuse your enums/dataclasses ---
 # from your_module import PieceType, Color, Piece, ChessGame
 # (Assume they are already defined in the runtime.)

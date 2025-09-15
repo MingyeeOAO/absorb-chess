@@ -3,3 +3,5 @@ nohup.out
 oldversion/
 *.pyc
 __pycache__/
+.github/
+DEBUG/
