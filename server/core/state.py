@@ -44,8 +44,15 @@ class GlobalState:
         # Client-lobby mapping
         cur.execute('''CREATE TABLE IF NOT EXISTS client_lobby_map (
             client_id TEXT PRIMARY KEY,
-            lobby_code TEXT
+            lobby_code TEXT,
+            player_color TEXT
         )''')
+        # Add player_color column if it doesn't exist (for existing databases)
+        try:
+            cur.execute('ALTER TABLE client_lobby_map ADD COLUMN player_color TEXT')
+        except sqlite3.OperationalError:
+            # Column already exists
+            pass
         # Searching players
         cur.execute('''CREATE TABLE IF NOT EXISTS searching_players (
             client_id TEXT PRIMARY KEY,
@@ -77,12 +84,16 @@ class GlobalState:
 
     def unregister_client(self, client_id: str, remove_from_lobby: bool = True):
         """Remove a client when they disconnect"""
-        if client_id in self.connected_clients:
-            del self.connected_clients[client_id]
-        self.remove_searching_player(client_id)
         if remove_from_lobby:
+            # Full cleanup - remove from everything
+            if client_id in self.connected_clients:
+                del self.connected_clients[client_id]
             self.remove_player_from_lobby(client_id)
-        self.remove_client_state(client_id)
+            self.remove_client_state(client_id)
+        else:
+            # Partial cleanup - only remove from searching (keep in connected_clients for auto-resign)
+            pass
+        self.remove_searching_player(client_id)
 
     def get_client_websocket(self, client_id: str) -> Optional[websockets.WebSocketServerProtocol]:
         """Get the websocket for a connected client"""
@@ -211,9 +222,12 @@ class GlobalState:
         cur.execute('REPLACE INTO lobbies (lobby_code, owner_id, game_state, settings, created_at) VALUES (?, ?, ?, ?, ?)',
                     (lobby_code, lobby.owner_id, game_state_json, settings_json, created_at_iso))
         self._db_conn.commit()
-        # Map the owner to this lobby in DB
-        if lobby.owner_id:
-            self.add_player_to_lobby(lobby.owner_id, lobby_code)
+        # Map the owner to this lobby in DB with their color
+        if lobby.owner_id and lobby.players:
+            # Find the owner player to get their color
+            owner_player = next((p for p in lobby.players if p.id == lobby.owner_id), None)
+            owner_color = owner_player.color.value if owner_player else 'white'
+            self.add_player_to_lobby(lobby.owner_id, lobby_code, owner_color)
 
     def remove_lobby(self, lobby_code: str):
         """Remove a lobby and update client mappings in DB"""
@@ -246,19 +260,25 @@ class GlobalState:
             
             # Reconstruct players list from client_lobby_map and connected_clients
             players = []
-            cur.execute('SELECT client_id FROM client_lobby_map WHERE lobby_code = ?', (lobby_code,))
+            cur.execute('SELECT client_id, player_color FROM client_lobby_map WHERE lobby_code = ?', (lobby_code,))
             client_rows = cur.fetchall()
             
             for client_row in client_rows:
                 client_id = client_row['client_id']
+                stored_color = client_row['player_color']
                 websocket = self.connected_clients.get(client_id)
-                if websocket:  # Only include connected clients
+                # Include clients even if websocket is None (disconnected but in auto-resign period)
+                if client_id in self.connected_clients:  # Check if client exists in dict
                     # Get client state to find player name
                     client_state = self.get_client_state(client_id)
                     player_name = client_state.get('player_name', 'Player') if client_state else 'Player'
                     
-                    # Determine color based on position (first player is WHITE, second is BLACK)
-                    player_color = Color.WHITE if len(players) == 0 else Color.BLACK
+                    # Use stored color if available, otherwise fall back to position-based assignment
+                    if stored_color:
+                        player_color = Color.WHITE if stored_color == 'white' else Color.BLACK
+                    else:
+                        # Fallback for legacy data without stored colors
+                        player_color = Color.WHITE if len(players) == 0 else Color.BLACK
                     
                     player = Player(client_id, player_name, player_color, websocket)
                     players.append(player)
@@ -277,10 +297,10 @@ class GlobalState:
             return self.get_lobby(lobby_code)
         return None
 
-    def add_player_to_lobby(self, client_id: str, lobby_code: str):
-        """Map a client to a lobby in DB"""
+    def add_player_to_lobby(self, client_id: str, lobby_code: str, player_color: str = None):
+        """Map a client to a lobby in DB with their color"""
         cur = self._db_conn.cursor()
-        cur.execute('REPLACE INTO client_lobby_map (client_id, lobby_code) VALUES (?, ?)', (client_id, lobby_code))
+        cur.execute('REPLACE INTO client_lobby_map (client_id, lobby_code, player_color) VALUES (?, ?, ?)', (client_id, lobby_code, player_color))
         self._db_conn.commit()
 
     def remove_player_from_lobby(self, client_id: str):
@@ -312,22 +332,27 @@ class GlobalState:
             # Reconstruct players list from client_lobby_map and connected_clients
             players = []
             cur2 = self._db_conn.cursor()
-            cur2.execute('SELECT client_id FROM client_lobby_map WHERE lobby_code = ?', (lobby_code,))
+            cur2.execute('SELECT client_id, player_color FROM client_lobby_map WHERE lobby_code = ?', (lobby_code,))
             client_rows = cur2.fetchall()
             
             for client_row in client_rows:
                 client_id = client_row['client_id']
+                stored_color = client_row['player_color']
                 websocket = self.connected_clients.get(client_id)
-                if websocket:  # Only include connected clients
-                    # Get client state to find player name
-                    client_state = self.get_client_state(client_id)
-                    player_name = client_state.get('player_name', 'Player') if client_state else 'Player'
-                    
-                    # Determine color based on position (first player is WHITE, second is BLACK)
+                # Include all clients in the lobby, regardless of connection status
+                # Get client state to find player name
+                client_state = self.get_client_state(client_id)
+                player_name = client_state.get('player_name', 'Player') if client_state else 'Player'
+                
+                # Use stored color if available, otherwise fall back to position-based assignment
+                if stored_color:
+                    player_color = Color.WHITE if stored_color == 'white' else Color.BLACK
+                else:
+                    # Fallback for legacy data without stored colors
                     player_color = Color.WHITE if len(players) == 0 else Color.BLACK
-                    
-                    player = Player(client_id, player_name, player_color, websocket)
-                    players.append(player)
+                
+                player = Player(client_id, player_name, player_color, websocket)
+                players.append(player)
             
             lobby = Lobby(code=lobby_code, owner_id=row['owner_id'], players=players, game_state=game_state, settings=settings, created_at=created_at)
             lobbies[lobby_code] = lobby
@@ -341,10 +366,13 @@ class GlobalState:
 
     def update_lobby_game_state(self, lobby_code: str, game_state: dict):
         """Update lobby game state in DB"""
+        print(f"[DB] Updating lobby {lobby_code} game state, game_over = {game_state.get('game_over')}")
         cur = self._db_conn.cursor()
         game_state_json = json.dumps(game_state) if game_state else None
         cur.execute('UPDATE lobbies SET game_state = ? WHERE lobby_code = ?', (game_state_json, lobby_code))
+        rows_affected = cur.rowcount
         self._db_conn.commit()
+        print(f"[DB] Update completed for lobby {lobby_code}, rows affected: {rows_affected}")
 
     def update_lobby_owner(self, lobby_code: str, new_owner_id: str):
         """Update lobby owner in DB"""

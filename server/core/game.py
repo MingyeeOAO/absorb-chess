@@ -40,10 +40,12 @@ class ChessGame:
         self.promotion_pending = pp if pp else None
         self.white_ms = game_state.get('white_ms', 0)
         self.black_ms = game_state.get('black_ms', 0)
-        # Ensure last_turn_start is always a valid timestamp (float)
-        self.last_turn_start = game_state.get('last_turn_start')
+        # Handle last_turn_start in clock dict if it exists, otherwise fall back to direct field
+        clock = game_state.get('clock', {})
+        self.last_turn_start = clock.get('last_turn_start') or game_state.get('last_turn_start')
         if self.last_turn_start is None:
-            self.last_turn_start = datetime.datetime.now().timestamp() * 1000  # ms since epoch
+            # Use UTC ISO string format for consistency
+            self.last_turn_start = datetime.datetime.utcnow().isoformat() + 'Z'
         return self
 
     def calculate_moves(self) -> Dict[tuple, list]:

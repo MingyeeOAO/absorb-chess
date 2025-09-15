@@ -1,4 +1,4 @@
-const UNDER_DEVELOPMENT = true;
+const UNDER_DEVELOPMENT = false;
 
 class ChessApp {
     constructor() {
@@ -212,7 +212,7 @@ class ChessApp {
                     console.error('Failed to parse message:', error);
                 }
             };
-
+            
             this.websocket.onopen = () => {
                 console.log(`Connected to ${url}`);
                 this.updateConnectionStatus(true);
@@ -261,6 +261,43 @@ class ChessApp {
         });
     }
     
+    renderClocks() {
+        // Determine which color is the local player
+        const myColor = this.playerColor;
+        const opponentColor = myColor === 'white' ? 'black' : 'white';
+        // Get player names
+        let myName = myColor.charAt(0).toUpperCase() + myColor.slice(1);
+        let oppName = opponentColor.charAt(0).toUpperCase() + opponentColor.slice(1);
+        if (this.lobbyData && this.lobbyData.players) {
+            const myPlayer = this.lobbyData.players.find(p => p.color === myColor);
+            const oppPlayer = this.lobbyData.players.find(p => p.color === opponentColor);
+            if (myPlayer) myName = myPlayer.name;
+            if (oppPlayer) oppName = oppPlayer.name;
+        }
+        // Connection status
+        const myStatus = document.getElementById(`${myColor}-connection-status`)?.textContent || 'Connected';
+        const oppStatus = document.getElementById(`${opponentColor}-connection-status`)?.textContent || 'Connected';
+        // Build HTML
+        const clocksHtml = `
+            <div class="player-clock ${myColor}-clock">
+                <div class="player-info">
+                    <span id="${myColor}-player-name">${myName}</span>
+                    <span id="${myColor}-connection-status" class="player-connection-status connected">${myStatus}</span>
+                </div>
+                <div class="clock-time">Time: <span id="clock-${myColor}">--:--</span></div>
+            </div>
+            <div class="player-clock ${opponentColor}-clock">
+                <div class="player-info">
+                    <span id="${opponentColor}-player-name">${oppName}</span>
+                    <span id="${opponentColor}-connection-status" class="player-connection-status connected">${oppStatus}</span>
+                </div>
+                <div class="clock-time">Time: <span id="clock-${opponentColor}">--:--</span></div>
+            </div>
+        `;
+        const clocksContainer = document.querySelector('.clocks');
+        if (clocksContainer) clocksContainer.innerHTML = clocksHtml;
+    }
+
     async searchGame() {
         try {
             await this.connectWebSocket();
@@ -573,6 +610,7 @@ class ChessApp {
         // Extract and cache valid moves from game state
         this.updateValidMovesFromGameState();
 
+        this.renderClocks();
         // Set player names from lobby data or game state
         if (this.lobbyData && this.lobbyData.players) {
             const whitePlayer = this.lobbyData.players.find(p => p.color === 'white');
@@ -597,12 +635,63 @@ class ChessApp {
             }
         }
 
+        // Reset connection states for both players - clear any disconnect state from previous games
+        const whiteStatusElement = document.getElementById('white-connection-status');
+        const blackStatusElement = document.getElementById('black-connection-status');
+        
+        if (whiteStatusElement) {
+            whiteStatusElement.textContent = 'Connected';
+            whiteStatusElement.classList.remove('disconnected');
+            whiteStatusElement.classList.add('connected');
+        }
+        
+        if (blackStatusElement) {
+            blackStatusElement.textContent = 'Connected';
+            blackStatusElement.classList.remove('disconnected');
+            blackStatusElement.classList.add('connected');
+        }
+
+        // Clear any disconnection timers and status messages from previous games
+        if (this.disconnectionTimer) {
+            clearInterval(this.disconnectionTimer);
+            this.disconnectionTimer = null;
+        }
+
+        // Remove any disconnection status divs from both player clocks
+        const whiteClockDiv = document.querySelector('.white-clock');
+        const blackClockDiv = document.querySelector('.black-clock');
+        
+        if (whiteClockDiv) {
+            const whiteDisconnectionStatus = whiteClockDiv.querySelector('.disconnection-status');
+            if (whiteDisconnectionStatus) {
+                whiteDisconnectionStatus.remove();
+            }
+        }
+        
+        if (blackClockDiv) {
+            const blackDisconnectionStatus = blackClockDiv.querySelector('.disconnection-status');
+            if (blackDisconnectionStatus) {
+                blackDisconnectionStatus.remove();
+            }
+        }
+
         this.showScreen('game-screen');
         this.renderChessBoard();
         this.initializeGameControls();
+        
+        // Clear any existing clock interval to avoid multiple timers
+        if (this.clockInterval) {
+            clearInterval(this.clockInterval);
+            this.clockInterval = null;
+        }
+        
+        // Reset timeout flag for new game
+        this.timeoutSent = false;
+        
+        // Force update clocks immediately to reflect fresh game state
         this.updateClocks();
-        // Start local ticking interval
-        if (this.clockInterval) clearInterval(this.clockInterval);
+        
+        // Start fresh clock interval
         this.clockInterval = setInterval(() => this.updateClocks(), 250);
 
         // Debug log
@@ -624,6 +713,7 @@ class ChessApp {
                     this.updateMoveHistory();
                     this.updateCurrentTurn();
                     this.updateClocks();
+                    //this.renderClocks();
                     this.clearSelection();
                     if (this.gameState.game_over) {
                         this.handleGameOver();
@@ -637,6 +727,7 @@ class ChessApp {
                 this.updateMoveHistory();
                 this.updateCurrentTurn();
                 this.updateClocks();
+                //this.renderClocks();
                 this.clearSelection();
                 if (this.gameState.game_over) {
                     this.handleGameOver();
@@ -817,8 +908,8 @@ class ChessApp {
                 })));
             }
             // Debug print: log all valid moves
-            console.log('Frontend valid_moves:', this.gameState.valid_moves);
-            console.log('Frontend allValidMoves:', this.allValidMoves);
+            // console.log('Frontend valid_moves:', this.gameState.valid_moves);
+            // console.log('Frontend allValidMoves:', this.allValidMoves);
         }
     }
 
@@ -938,12 +1029,28 @@ class ChessApp {
         if (!this.gameState || !this.gameState.clock) return;
         const { white_ms, black_ms, last_turn_start } = this.gameState.clock;
 
+    // console.log(`[CLOCK] Received - white_ms: ${white_ms}, black_ms: ${black_ms}, current_turn: ${this.gameState.current_turn}, last_turn_start: ${last_turn_start}`); // debug
+
         // Apply live ticking only for current player locally
         let liveWhite = white_ms;
         let liveBlack = black_ms;
         if (last_turn_start) {
             try {
-                const started = new Date(last_turn_start);
+                let started;
+                if (typeof last_turn_start === 'number') {
+                    // Handle timestamp format - could be seconds or milliseconds
+                    if (last_turn_start > 1e12) {
+                        // Assume milliseconds if > 1e12
+                        started = new Date(last_turn_start);
+                    } else {
+                        // Assume seconds if smaller
+                        started = new Date(last_turn_start * 1000);
+                    }
+                } else {
+                    // Handle ISO string format
+                    started = new Date(last_turn_start);
+                }
+                
                 const now = new Date();
                 const elapsed = Math.max(0, now.getTime() - started.getTime());
                 if (this.gameState.current_turn === 'white') {
@@ -951,19 +1058,50 @@ class ChessApp {
                 } else {
                     liveBlack = Math.max(0, (black_ms || 0) - elapsed);
                 }
-            } catch (e) {}
+            } catch (e) {
+                console.error('[CLOCK] Error parsing last_turn_start:', e);
+            }
         }
-        const whiteEl = document.getElementById('clock-white');
-        const blackEl = document.getElementById('clock-black');
-        if (whiteEl) whiteEl.textContent = this.formatMs(liveWhite);
-        if (blackEl) blackEl.textContent = this.formatMs(liveBlack);
+        
+        // Update clock displays based on player perspective
+        const myColor = this.playerColor;
+        const opponentColor = myColor === 'white' ? 'black' : 'white';
+        
+        const myClockEl = document.getElementById(`clock-${myColor}`);
+        const oppClockEl = document.getElementById(`clock-${opponentColor}`);
+        const myClockContainer = document.querySelector(`.${myColor}-clock`);
+        const oppClockContainer = document.querySelector(`.${opponentColor}-clock`);
+        
+        // Update times based on actual color, not position
+        if (myColor === 'white') {
+            if (myClockEl) myClockEl.textContent = this.formatMs(liveWhite);
+            if (oppClockEl) oppClockEl.textContent = this.formatMs(liveBlack);
+        } else {
+            if (myClockEl) myClockEl.textContent = this.formatMs(liveBlack);
+            if (oppClockEl) oppClockEl.textContent = this.formatMs(liveWhite);
+        }
+        
+    // console.log(`[CLOCK] Display updated - White: ${this.formatMs(liveWhite)}, Black: ${this.formatMs(liveBlack)}`); // debug
+        
+        // Add visual indication for active clock
+        if (myClockContainer && oppClockContainer) {
+            if (this.gameState.current_turn === myColor) {
+                myClockContainer.classList.add('active-clock');
+                oppClockContainer.classList.remove('active-clock');
+            } else {
+                oppClockContainer.classList.add('active-clock');
+                myClockContainer.classList.remove('active-clock');
+            }
+        }
 
         // If active player's time hits zero locally, notify server once
-        if (!this.gameState.game_over) {
+        if (!this.gameState.game_over && !this.timeoutSent) {
             if (this.gameState.current_turn === 'white' && liveWhite <= 0) {
                 this.sendMessage({ type: 'timeout' });
+                this.timeoutSent = true; // Prevent sending multiple timeout messages
             } else if (this.gameState.current_turn === 'black' && liveBlack <= 0) {
                 this.sendMessage({ type: 'timeout' });
+                this.timeoutSent = true; // Prevent sending multiple timeout messages
             }
         }
     }

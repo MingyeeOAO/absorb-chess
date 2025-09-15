@@ -24,44 +24,68 @@ class GameHandler:
             
         # Update clock for the last turn if it exists
         if game_state.get('clock'):
-            now = datetime.datetime.now().isoformat()
+            # Use UTC time to avoid timezone issues
+            now = datetime.datetime.utcnow().isoformat() + 'Z'
             clock = game_state['clock']
             last_turn = clock.get('last_turn_start')
-            prev_turn = 'black' if game_state['current_turn'] == 'white' else 'white'
+            
+            
+            current_moving_player = game_state['current_turn'] 
+                
             if last_turn:
-                now_dt = datetime.datetime.now()
+                now_dt = datetime.datetime.utcnow()
                 if isinstance(last_turn, str):
                     try:
-                        last_dt = datetime.datetime.fromisoformat(last_turn)
+                        # Handle both with and without 'Z' suffix for UTC
+                        last_turn_clean = last_turn.rstrip('Z')
+                        last_dt = datetime.datetime.fromisoformat(last_turn_clean)
                         elapsed = (now_dt - last_dt).total_seconds() * 1000
                     except Exception:
-                        elapsed = now_dt.timestamp() * 1000 - float(last_turn)
+                        # If string parsing fails, try to convert to float timestamp
+                        try:
+                            elapsed = now_dt.timestamp() * 1000 - float(last_turn)
+                        except:
+                            elapsed = 0  # Skip this update if we can't parse
                 else:
-                    elapsed = now_dt.timestamp() * 1000 - float(last_turn)
-                # Update the time for the player who just completed their turn
-                if prev_turn == 'white':
+                    # Handle numeric timestamp (either in seconds or milliseconds)
+                    try:
+                        timestamp = float(last_turn)
+                        # Check if timestamp is in seconds (Unix timestamp) or milliseconds
+                        if timestamp > 1e12:  # If greater than 1e12, assume milliseconds
+                            elapsed = now_dt.timestamp() * 1000 - timestamp
+                        else:  # Otherwise assume seconds
+                            elapsed = now_dt.timestamp() - timestamp
+                            elapsed *= 1000  # Convert to milliseconds
+                    except:
+                        elapsed = 0  # Skip this update if we can't parse
+                # Update the time for the player who is making this move (current_moving_player)
+                if current_moving_player == 'white':
+                    # print(f"[CLOCK] White completed turn - before: {clock['white_ms']}, elapsed: {elapsed}, increment: {clock.get('increment_ms')}") # debug
                     clock['white_ms'] = max(0, clock['white_ms'] - elapsed)
                     if clock['white_ms'] == 0:
                         game_state['game_over'] = True
                         game_state['winner'] = 'black'
-                    if clock['increment_ms']:
+                    if clock.get('increment_ms', 0) > 0:
                         clock['white_ms'] += clock['increment_ms']
+                    # print(f"[CLOCK] White after update: {clock['white_ms']}") # debug
                 else:
+                    # print(f"[CLOCK] Black completed turn - before: {clock['black_ms']}, elapsed: {elapsed}, increment: {clock.get('increment_ms')}") # debug
                     clock['black_ms'] = max(0, clock['black_ms'] - elapsed)
                     if clock['black_ms'] == 0:
                         game_state['game_over'] = True
                         game_state['winner'] = 'white'
-                    if clock['increment_ms']:
+                    if clock.get('increment_ms', 0) > 0:
                         clock['black_ms'] += clock['increment_ms']
+                    # print(f"[CLOCK] Black after update: {clock['black_ms']}") # debug
             # Update last turn start time
             clock['last_turn_start'] = now
         
         if game.move_piece(from_pos, to_pos):
-            print(f"Move successful! Turn after move: {game.current_turn.value}")
+            # print(f"Move successful! Turn after move: {game.current_turn.value}") # debug
             
             # Get updated game state
             new_state = game.get_board_state()
-            print(f"New state current_turn: {new_state['current_turn']}")
+            # print(f"New state current_turn: {new_state['current_turn']}") # debug
             
             # Merge clock information
             if game_state.get('clock'):
@@ -251,11 +275,16 @@ class GameHandler:
         # Update game state
         lobby.game_state['game_over'] = True
         lobby.game_state['winner'] = winner
+        lobby.game_state['timeout_player'] = current_turn
+        
+        # Update in database to prevent race conditions
+        self.state.update_lobby_game_state(lobby.code, lobby.game_state)
         
         return {
             'type': 'game_over',
             'reason': 'timeout',
-            'game_state': lobby.game_state
+            'game_state': lobby.game_state,
+            'winner': winner
         }
 
     async def handle_offer_draw(self, client_id: str, websocket):

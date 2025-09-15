@@ -101,11 +101,7 @@ class LobbyHandler:
             if hasattr(p, 'websocket') and p.websocket:
                 await self.connection_manager.send_message(p.websocket, lobby_update)
         return lobby_update
-                
-            
-    async def handle_disconnect(self, client_id: str) -> Optional[dict]:
-        """Handle a client disconnection"""
-        return await self.leave_lobby(client_id, None, {})
+
 
     async def join_lobby(self, client_id: str, websocket, data: dict) -> Optional[dict]:
         """Join an existing lobby"""
@@ -126,8 +122,8 @@ class LobbyHandler:
         player = Player(client_id, player_name, player_color, websocket)
         lobby.players.append(player)
         
-        # Add player to lobby mapping
-        self.state.add_player_to_lobby(client_id, lobby_code)
+        # Add player to lobby mapping with their color
+        self.state.add_player_to_lobby(client_id, lobby_code, player_color.value)
         
         # Create the common lobby data structure
         lobby_data = {
@@ -192,14 +188,16 @@ class LobbyHandler:
                 increment_ms = increment_seconds * 1000 if increment_seconds else 0
                 
                 # Add clock information to game state
-                import time
-                now_ms = int(time.time() * 1000)
+                # Use UTC time to avoid timezone issues
+                now_iso = datetime.datetime.utcnow().isoformat() + 'Z'
+                # print(f"[LOBBY DEBUG] Setting last_turn_start to: {now_iso} (type: {type(now_iso)})")
                 lobby.game_state['clock'] = {
                     'white_ms': time_ms if time_ms is not None else 0,
                     'black_ms': time_ms if time_ms is not None else 0,
                     'increment_ms': increment_ms,
-                    'last_turn_start': now_ms
+                    'last_turn_start': now_iso
                 }
+                # print(f"[LOBBY DEBUG] Clock data set: {lobby.game_state['clock']}")
                 self.state.update_lobby_game_state(lobby.code, lobby.game_state)
                 
                 # Add game state info
@@ -212,6 +210,7 @@ class LobbyHandler:
                 # Send game started message to both players
                 for player in lobby.players:
                     # Create player-specific response
+                    # print(f"[LOBBY DEBUG] Sending game_state with clock: {lobby.game_state.get('clock')}")
                     response = {
                         'type': 'game_started',
                         'game_state': lobby.game_state,

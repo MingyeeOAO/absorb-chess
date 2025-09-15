@@ -48,18 +48,18 @@ class ConnectionManager:
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:
-            # Clean up when client disconnects
-            # Close websocket immediately but don't clean up state yet
+            # Don't immediately remove from connected_clients - let auto-resign handle cleanup
+            # Just close the websocket but keep the client in connected_clients for auto-resign
             if client_id in self.state.connected_clients:
                 try:
                     websocket = self.state.connected_clients[client_id]
                     await websocket.close()
                 except Exception:
                     pass
-                # Remove from connected_clients but keep everything else
-                del self.state.connected_clients[client_id]
+                # Mark websocket as None to indicate disconnection, but keep the entry
+                self.state.connected_clients[client_id] = None
             
-            # Always call handle_disconnect - it will manage the cleanup timing
+            # Call handle_disconnect - it will manage the cleanup timing
             await self.handle_disconnect(client_id)
             
         return client_id
@@ -69,14 +69,24 @@ class ConnectionManager:
         lobby = self.state.get_lobby(lobby_code)
         if not lobby:
             return
+        
+        sent_count = 0
         for player in lobby.players:
             if player.id != exclude_client_id:
-                ws = self.state.get_client_websocket(player.id)
-                if ws:
+                # Use the player's websocket directly (from the reconstructed lobby)
+                # This will be None for disconnected players, which is correct
+                ws = player.websocket if hasattr(player, 'websocket') else None
+                if ws:  # Only send to clients with active websockets
                     try:
                         await ws.send(json.dumps(message))
-                    except Exception:
-                        pass
+                        sent_count += 1
+                    except Exception as e:
+                        print(f"[BROADCAST] Failed to send to player {player.id}: {e}")
+        
+        if sent_count > 0:
+            print(f"[BROADCAST] Sent {message.get('type', 'unknown')} message to {sent_count} players in lobby {lobby_code}")
+        else:
+            print(f"[BROADCAST] No connected players found in lobby {lobby_code} to send {message.get('type', 'unknown')} message")
 
 
     async def unregister_client(self, client_id: str, remove_from_lobby: bool = True):
@@ -98,10 +108,11 @@ class ConnectionManager:
             return
             
         timestamp = datetime.datetime.now()
-        abort_time = timestamp + datetime.timedelta(seconds=40)
+        abort_time = timestamp + datetime.timedelta(seconds=10)
         
         # Capture lobby code before any cleanup - this is crucial
-        lobby_code = self.state.get_lobby_by_client(client_id) 
+        lobby = self.state.get_lobby_by_client(client_id)
+        lobby_code = lobby.code if lobby else None
         
         # Only broadcast to clients in the same lobby as the disconnecting player
         if lobby_code:
@@ -115,13 +126,13 @@ class ConnectionManager:
         # Schedule auto-resign/game over after 40 seconds
         async def auto_resign():
             try:
-                await asyncio.sleep(40)
+                await asyncio.sleep(10)
                 
                 # Just use the lobby_code we captured earlier - much simpler!
                 if lobby_code:
                     lobby = self.state.get_lobby(lobby_code)
-                    # print(f"[Auto-Resign] lobby: {lobby}, player: {client_id}")
-                    # print(f"[Auto-Resign] using lobby_code: {lobby_code}")
+                    print(f"[Auto-Resign] lobby: {lobby}, player: {client_id}")
+                    print(f"[Auto-Resign] using lobby_code: {lobby_code}")
                     
                     # Only resign if game is still active
                     if lobby and lobby.game_state and not lobby.game_state.get('game_over'):
@@ -133,7 +144,11 @@ class ConnectionManager:
                             await self.broadcast_to_lobby_clients(lobby_code, response)
                 
                 # NOW clean up everything - after auto-resign is complete
-                # print(f"[Auto-Resign] Cleaning up client {client_id}")
+                print(f"[Auto-Resign] Cleaning up client {client_id}")
+                # Remove from connected_clients (was set to None during disconnect)
+                if client_id in self.state.connected_clients:
+                    del self.state.connected_clients[client_id]
+                # Only remove from lobby AFTER auto-resign has been processed
                 await self.unregister_client(client_id, remove_from_lobby=True)
                 
             except asyncio.CancelledError:
@@ -157,7 +172,8 @@ class ConnectionManager:
         
         if client_id in self.state.connected_clients:
             timestamp = datetime.datetime.now()
-            lobby_code = self.state.get_lobby_by_client(client_id)
+            lobby = self.state.get_lobby_by_client(client_id)
+            lobby_code = lobby.code if lobby else None
             if lobby_code:
                 await self.broadcast_to_lobby_clients(lobby_code, {
                     'type': 'player_reconnected',

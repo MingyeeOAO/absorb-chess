@@ -24,21 +24,36 @@ class GameServer:
         
     async def handle_timeout(self, lobby_code: str, timed_out_player: str, winner: str):
         """Handle automatic timeout from timer manager"""
+        print(f"[TIMEOUT] Handling timeout for lobby {lobby_code}, timed_out_player: {timed_out_player}, winner: {winner}")
         lobby = self.state.get_lobby(lobby_code)
-        if not lobby:
+        if not lobby or not lobby.game_state:
+            print(f"[TIMEOUT] No lobby or game state found for {lobby_code}")
             return
             
-        # Create timeout message
+        print(f"[TIMEOUT] Players in lobby: {[p.id for p in lobby.players]}")
+        print(f"[TIMEOUT] Game over status: {lobby.game_state.get('game_over')}")
+        
+        # Ensure the timeout information is in the game state
+        lobby.game_state['game_over'] = True
+        lobby.game_state['winner'] = winner
+        lobby.game_state['timeout_player'] = timed_out_player
+        
+        # Update the database immediately to prevent infinite timeout loop
+        print(f"[TIMEOUT] Updating database with game_over=True for lobby {lobby_code}")
+        self.state.update_lobby_game_state(lobby_code, lobby.game_state)
+        print(f"[TIMEOUT] Database update completed for lobby {lobby_code}")
+        
+        # Create timeout message with the current game state
         timeout_message = {
             'type': 'game_over',
             'reason': 'timeout',
             'game_state': lobby.game_state,
-            'timed_out_player': timed_out_player
+            'timed_out_player': timed_out_player,
+            'winner': winner
         }
         
-        # Send to all players in the lobby
-        for player in lobby.players:
-            await self.connection_manager.send_message(player.websocket, timeout_message)
+        print(f"[TIMEOUT] Broadcasting timeout message to lobby {lobby_code}")
+        await self.connection_manager.broadcast_to_lobby_clients(lobby_code, timeout_message)
         
     async def handle_message(self, client_id: str, websocket, data: dict):
         """Route messages to appropriate handlers"""
