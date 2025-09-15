@@ -19,56 +19,11 @@ class ConnectionManager:
             message_handler: Optional callback for handling game-specific messages
         """
         self.state = GlobalState.get_instance()
-        self.connection_check_tasks = {}
         self.message_handler = message_handler
         self.auto_resign_tasks = {}
         self.game_handler = game_handler
    
     
-    async def start_connection_checker(self, client_id: str, websocket):
-        """Start periodic connection checking for a client"""
-        if client_id in self.connection_check_tasks:
-            self.connection_check_tasks[client_id].cancel()
-            del self.connection_check_tasks[client_id]
-        
-        async def checker():
-            while True:
-                try:
-                    await asyncio.sleep(10)
-                    await self.check_client_connection(client_id, websocket)
-                except Exception as e:
-                    # print(f"Connection checker error for {client_id}: {str(e)}")
-                    break
-
-        self.state.update_connection_check(client_id)
-        task = asyncio.create_task(checker())
-        self.connection_check_tasks[client_id] = task
-    
-    async def check_client_connection(self, client_id: str, websocket):
-        """Check if a client is still connected and handle timeouts"""
-        try:
-            timestamp = datetime.datetime.now()
-            await self.send_message(websocket, {
-                'type': 'connection_check',
-                'timestamp': timestamp.isoformat()
-            })
-            await asyncio.sleep(2)
-            
-            last_response = self.state.get_last_check_time(client_id)
-            if not last_response or (timestamp - last_response).total_seconds() > 10:
-                missed = self.state.increment_missed_checks(client_id)
-                if missed >= 8:  # 40 seconds (8 * 5s checks)
-                    await self.handle_disconnect(client_id)
-                    return False
-            else:
-                if self.state.missed_checks.get(client_id, 0) > 0:
-                    self.state.update_connection_check(client_id)
-                    await self.handle_reconnection(client_id)
-                return True
-        except websockets.exceptions.ConnectionClosed:
-            await self.handle_disconnect(client_id)
-            return False
-                
     async def send_message(self, websocket, message):
         """Send a message to a specific websocket"""
         try:
@@ -88,9 +43,6 @@ class ConnectionManager:
         # Register with global state
         self.state.register_client(client_id, websocket)
         
-        # Start connection checker task
-        await self.start_connection_checker(client_id, websocket)
-        
         try:
             # Handle messages until connection closes
             await self.handle_client(client_id, websocket)
@@ -98,10 +50,6 @@ class ConnectionManager:
             pass
         finally:
             # Clean up when client disconnects
-            if client_id in self.connection_check_tasks:
-                self.connection_check_tasks[client_id].cancel()
-                del self.connection_check_tasks[client_id]
-            
             # Close websocket immediately but don't clean up state yet
             if client_id in self.state.connected_clients:
                 try:
@@ -219,43 +167,11 @@ class ConnectionManager:
                 }, exclude_client_id=client_id)
 
     async def handle_client(self, client_id: str, websocket):
-        """Register a new client and start monitoring their connection"""
-        while True:
-            client_id = str(uuid.uuid4())
-            if not self.state.get_client_websocket(client_id):
-                break
-                
-        # Register with global state
-        self.state.register_client(client_id, websocket)
-        
-        # Start connection checker task
-        await self.start_connection_checker(client_id, websocket)
-        
-        try:
-            await self.handle_client(client_id, websocket)
-        except websockets.exceptions.ConnectionClosed:
-            pass
-        finally:
-            # Cancel connection checker task
-            if client_id in self.connection_check_tasks:
-                self.connection_check_tasks[client_id].cancel()
-                del self.connection_check_tasks[client_id]
-            # Clean up when client disconnects
-            await self.handle_disconnect(client_id)
-    
-
-    
-    async def handle_client(self, client_id: str, websocket):
         """Handle incoming messages from a client"""
         async for message in websocket:
             try:
                 data = json.loads(message)
                 
-                # Handle connection-specific messages
-                if data.get('type') == 'connection_response':
-                    self.state.update_connection_check(client_id)
-                    continue
-                    
                 # Forward game-specific messages to the handler
                 if self.message_handler:
                     await self.message_handler(client_id, websocket, data)

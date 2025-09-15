@@ -18,10 +18,9 @@ class ChessApp {
         this.pieceImages = null;
         this.disconnectionTimer = null;
         this.disconnectionWarning = null;
-        this.lastConnectionCheck = Date.now();
-        this.missedChecks = 0;
         this.disconnectionTimer = null;
         this.disconnectionCountdown = null;
+        this.heartbeatTimer = null;
         
         this.initializeEventListeners();
         this.loadTextureSet('classic').then(() => {
@@ -219,17 +218,14 @@ class ChessApp {
                 this.updateConnectionStatus(true);
                 
                 // Set up connection check interval
-                if (this.connectionCheckInterval) {
-                    clearInterval(this.connectionCheckInterval);
-                }
-                this.connectionCheckInterval = setInterval(() => {
-                    if (this.gameState && !this.gameState.game_over) {
-                        this.sendMessage({
-                            type: 'connection_check',
-                            timestamp: Date.now()
-                        });
+                    if (this.heartbeatTimer) {
+                        clearInterval(this.heartbeatTimer);
                     }
-                }, 10000);
+                    this.heartbeatTimer = setInterval(() => {
+                        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                            this.sendMessage({ type: 'heartbeat', timestamp: Date.now() });
+                        }
+                    }, 60000); // 1 minute
 
                 // Set up heartbeat interval
                 if (this.heartbeatInterval) {
@@ -402,14 +398,6 @@ class ChessApp {
         console.log('Received message:', data);
         
         switch (data.type) {
-            case 'connection_check':
-                // Respond immediately to connection check
-                this.sendMessage({
-                    type: 'connection_check_response',
-                    timestamp: data.timestamp
-                });
-                break;
-            
             case 'player_disconnected':
                 this.handlePlayerDisconnection(data);
                 break;
@@ -442,10 +430,6 @@ class ChessApp {
                 this.gameState = data.game_state;
                 this.updateValidMovesFromGameState();
                 this.handleGameOver(data.reason);
-                break;
-            case 'connection_check_response':
-                // Reset reconnect attempts when we get a response
-                this.reconnectAttempts = 0;
                 break;
             case 'draw_offered':
                 this.handleDrawOffered(data);
