@@ -88,28 +88,30 @@ class GameServer:
         elif message_type == 'move_piece':
             lobby = self.lobby_handler.get_lobby_by_client(client_id)
             if lobby and lobby.game_state:
-                response = await self.game_handler.handle_move(client_id, websocket, lobby.game_state, data)
-                
-                # Update lobby game state if move was successful
-                if response.get('type') == 'move_made' and response.get('game_state'):
-                    lobby.game_state = response['game_state']
-                
-                # Special handling for promotion_pending - only send to the player whose turn it is
-                if response.get('type') == 'promotion_pending':
-                    # Update lobby state for promotion_pending too
-                    if response.get('game_state'):
-                        lobby.game_state = response['game_state']
-                    current_turn = response.get('game_state', {}).get('current_turn')
-                    for player in lobby.players:
-                        # Only send to the player whose turn it is to choose promotion
-                        # Compare player.color.value (string) with current_turn (string)
-                        if player.color.value == current_turn:
+                responses = await self.game_handler.handle_move(client_id, websocket, lobby.game_state, data)
+                # If the response is not a list, make it a list for uniform processing
+                if not isinstance(responses, list):
+                    responses = [responses]
+                for response in responses:
+                    # Update lobby game state if move was successful
+                    if response.get('type') == 'move_made' and response.get('game_state'):
+                        self.state.update_lobby_game_state(lobby.code, response['game_state'])
+                    # Special handling for promotion_pending - only send to the player whose turn it is
+                    if response.get('type') == 'promotion_pending':
+                        # Update lobby state for promotion_pending too
+                        if response.get('game_state'):
+                            self.state.update_lobby_game_state(lobby.code, response['game_state'])
+                        current_turn = response.get('game_state', {}).get('current_turn')
+                        for player in lobby.players:
+                            # Only send to the player whose turn it is to choose promotion
+                            # Compare player.color.value (string) with current_turn (string)
+                            if player.color.value == current_turn:
+                                await self.connection_manager.send_message(player.websocket, response)
+                                break
+                    else:
+                        # For all other move responses, send to all players
+                        for player in lobby.players:
                             await self.connection_manager.send_message(player.websocket, response)
-                            break
-                else:
-                    # For all other move responses, send to all players
-                    for player in lobby.players:
-                        await self.connection_manager.send_message(player.websocket, response)
                     
         elif message_type == 'get_valid_moves':
             lobby = self.lobby_handler.get_lobby_by_client(client_id)
@@ -124,7 +126,7 @@ class GameServer:
             if response:
                 lobby = self.lobby_handler.get_lobby_by_client(client_id)
                 if lobby:
-                    lobby.game_state = response['game_state']
+                    self.state.update_lobby_game_state(lobby.code, response['game_state'])
                     for player in lobby.players:
                         await self.connection_manager.send_message(player.websocket, response)
                         
@@ -150,7 +152,7 @@ class GameServer:
             if response:
                 lobby = self.lobby_handler.get_lobby_by_client(client_id)
                 if lobby:
-                    lobby.game_state = response['game_state']
+                    self.state.update_lobby_game_state(lobby.code, response['game_state'])
                     for player in lobby.players:
                         await self.connection_manager.send_message(player.websocket, response)
                         
@@ -169,7 +171,7 @@ class GameServer:
             if response:
                 lobby = self.lobby_handler.get_lobby_by_client(client_id)
                 if lobby:
-                    lobby.game_state = response['game_state']
+                    self.state.update_lobby_game_state(lobby.code, response['game_state'])
                     for player in lobby.players:
                         await self.connection_manager.send_message(player.websocket, response)
     

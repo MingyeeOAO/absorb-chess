@@ -27,38 +27,32 @@ class GameHandler:
             now = datetime.datetime.now().isoformat()
             clock = game_state['clock']
             last_turn = clock.get('last_turn_start')
-            
+            prev_turn = 'black' if game_state['current_turn'] == 'white' else 'white'
             if last_turn:
-                # Support both ISO string and float timestamps
                 now_dt = datetime.datetime.now()
                 if isinstance(last_turn, str):
                     try:
                         last_dt = datetime.datetime.fromisoformat(last_turn)
                         elapsed = (now_dt - last_dt).total_seconds() * 1000
                     except Exception:
-                        # fallback: treat as float ms
                         elapsed = now_dt.timestamp() * 1000 - float(last_turn)
                 else:
-                    # treat as float ms
                     elapsed = now_dt.timestamp() * 1000 - float(last_turn)
                 # Update the time for the player who just completed their turn
-                if game_state['current_turn'] == 'white':
-                    clock['black_ms'] = max(0, clock['black_ms'] - elapsed)
-                    if clock['black_ms'] == 0:
-                        game_state['game_over'] = True
-                        game_state['winner'] = 'white'
-                else:
+                if prev_turn == 'white':
                     clock['white_ms'] = max(0, clock['white_ms'] - elapsed)
                     if clock['white_ms'] == 0:
                         game_state['game_over'] = True
                         game_state['winner'] = 'black'
-                # Add increment
-                if clock['increment_ms']:
-                    if game_state['current_turn'] == 'white':
-                        clock['black_ms'] += clock['increment_ms']
-                    else:
+                    if clock['increment_ms']:
                         clock['white_ms'] += clock['increment_ms']
-            
+                else:
+                    clock['black_ms'] = max(0, clock['black_ms'] - elapsed)
+                    if clock['black_ms'] == 0:
+                        game_state['game_over'] = True
+                        game_state['winner'] = 'white'
+                    if clock['increment_ms']:
+                        clock['black_ms'] += clock['increment_ms']
             # Update last turn start time
             clock['last_turn_start'] = now
         
@@ -105,12 +99,20 @@ class GameHandler:
                 else:
                     reason = 'stalemate'
                     new_state['winner'] = None  
-                return {
+                # First send move_made
+                
+                # Then send game_over
+                return [{
+                    'type': 'move_made',
+                    'game_state': new_state,
+                    'valid_moves': client_moves,
+                    'last_move': {'from': from_pos, 'to': to_pos}
+                },
+                {
                     'type': 'game_over',
                     'reason': reason,
                     'game_state': new_state
-                }
-            
+                }]
             # Send updated game state and new valid moves
             return {
                 'type': 'move_made',
@@ -333,7 +335,7 @@ class GameHandler:
                         new_state['clock'] = lobby.game_state['clock']
                     
                     # Update lobby state
-                    lobby.game_state = new_state
+                    self.state.update_lobby_game_state(lobby.code, new_state)
                     
                     return {
                         'type': 'promotion_canceled',
@@ -375,7 +377,7 @@ class GameHandler:
                 new_state['clock'] = lobby.game_state['clock']
             
             # Update lobby state
-            lobby.game_state = new_state
+            self.state.update_lobby_game_state(lobby.code, new_state)
             
             # Check for game over after promotion
             if not valid_moves:

@@ -7,9 +7,9 @@ from server.core.game import ChessGame
 from server.core.state import GlobalState
 import random
 import string
-
+#from server.networking.connection import ConnectionManager
 class LobbyHandler:
-    def __init__(self, connection_manager):
+    def __init__(self, connection_manager ):
         self.connection_manager = connection_manager
         self.state = GlobalState.get_instance()
     
@@ -29,6 +29,9 @@ class LobbyHandler:
         """Create a new lobby"""
         lobby_code = self.generate_lobby_code()
         player_name = data.get('player_name', 'Player')
+        
+        # Store player name in client state for reconstruction later
+        self.state.update_client_state(client_id, 'in_lobby', player_name=player_name, lobby_code=lobby_code)
         
         lobby = Lobby(
             code=lobby_code,
@@ -61,10 +64,16 @@ class LobbyHandler:
         if not lobby:
             return None
             
-        # Remove player from lobby
-        lobby.players = [p for p in lobby.players if p.id != client_id]
+        # Remove player from client_lobby_map in DB (this persists the removal)
+        self.state.remove_player_from_lobby(client_id)
         
-        if not lobby.players:
+        # Remove player from client state
+        self.state.remove_client_state(client_id)
+        
+        # Reload lobby to get updated players list
+        lobby = self.state.get_lobby(lobby.code)
+        
+        if not lobby or not lobby.players:
             # If lobby is empty, delete it
             self.state.remove_lobby(lobby.code)
             return {
@@ -72,18 +81,27 @@ class LobbyHandler:
                 'lobby_code': lobby.code
             }
             
-        # If owner left, transfer ownership to next player
+        # If owner left, transfer ownership to next player and update in DB
         if client_id == lobby.owner_id and lobby.players:
-            lobby.owner_id = lobby.players[0].id
+            new_owner_id = lobby.players[0].id
+            # Update owner in database
+            self.state.update_lobby_owner(lobby.code, new_owner_id)
+            lobby.owner_id = new_owner_id
             
         # Notify remaining players
-        return {
+        lobby_update = {
             'type': 'lobby_update',
             'lobby_code': lobby.code,
             'players': [{'id': p.id, 'name': p.name, 'color': p.color.value} 
                        for p in lobby.players],
             'settings': lobby.settings
         }
+        # Send lobby update to all remaining players
+        for p in lobby.players:
+            if hasattr(p, 'websocket') and p.websocket:
+                await self.connection_manager.send_message(p.websocket, lobby_update)
+        return lobby_update
+                
             
     async def handle_disconnect(self, client_id: str) -> Optional[dict]:
         """Handle a client disconnection"""
@@ -100,6 +118,10 @@ class LobbyHandler:
             return None
             
         player_name = data.get('player_name', 'Player')
+        
+        # Store player name in client state for reconstruction later
+        self.state.update_client_state(client_id, 'in_lobby', player_name=player_name, lobby_code=lobby_code)
+        
         player_color = Color.BLACK if len(lobby.players) == 1 else Color.WHITE
         player = Player(client_id, player_name, player_color, websocket)
         lobby.players.append(player)
@@ -145,7 +167,8 @@ class LobbyHandler:
 
     async def start_game(self, client_id: str, websocket, data: dict) -> Optional[dict]:
         """Start a game in a lobby"""
-        for lobby in self.state.get_all_lobbies().values():
+        lobby = self.state.get_lobby_by_client(client_id)
+        if lobby:
             if lobby.owner_id == client_id and len(lobby.players) == 2:
                 game = ChessGame()
                 
@@ -158,6 +181,7 @@ class LobbyHandler:
                 
                 # Get game state with clocks
                 lobby.game_state = game.get_board_state()
+                self.state.update_lobby_game_state(lobby.code, lobby.game_state)
                 
                 # Setup clock information based on lobby settings
                 time_minutes = lobby.settings.get('time_minutes', 0)
@@ -176,12 +200,14 @@ class LobbyHandler:
                     'increment_ms': increment_ms,
                     'last_turn_start': now_ms
                 }
+                self.state.update_lobby_game_state(lobby.code, lobby.game_state)
                 
                 # Add game state info
                 lobby.game_state['valid_moves'] = client_moves
                 lobby.game_state['current_turn'] = 'white'
                 lobby.game_state['game_over'] = False
                 lobby.game_state['winner'] = None
+                self.state.update_lobby_game_state(lobby.code, lobby.game_state)
                 
                 # Send game started message to both players
                 for player in lobby.players:

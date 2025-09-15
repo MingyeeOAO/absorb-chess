@@ -1,4 +1,4 @@
-const UNDER_DEVELOPMENT = false;
+const UNDER_DEVELOPMENT = true;
 
 class ChessApp {
     constructor() {

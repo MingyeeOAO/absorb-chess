@@ -25,7 +25,8 @@ class TimerManager:
         """Check all active games for timeouts"""
         current_time = time.time() * 1000  # Convert to milliseconds
         
-        for lobby_code, lobby in self.state.lobbies.items():
+        all_lobbies = self.state.get_all_lobbies()
+        for lobby_code, lobby in all_lobbies.items():
             if not lobby.game_state or lobby.game_state.get('game_over'):
                 continue
                 

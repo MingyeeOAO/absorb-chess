@@ -4,7 +4,6 @@ import websockets
 import datetime
 from typing import Dict
 from server.core.game import ChessGame
-from server.handlers.lobby_handler import LobbyHandler
 from server.core.state import GlobalState
 from server.handlers.game_handler import GameHandler
 import json
@@ -102,7 +101,7 @@ class ConnectionManager:
         abort_time = timestamp + datetime.timedelta(seconds=40)
         
         # Capture lobby code before any cleanup - this is crucial
-        lobby_code = self.state.client_lobby_map.get(client_id)
+        lobby_code = self.state.get_lobby_by_client(client_id) 
         
         # Only broadcast to clients in the same lobby as the disconnecting player
         if lobby_code:
@@ -158,7 +157,7 @@ class ConnectionManager:
         
         if client_id in self.state.connected_clients:
             timestamp = datetime.datetime.now()
-            lobby_code = self.state.client_lobby_map.get(client_id)
+            lobby_code = self.state.get_lobby_by_client(client_id)
             if lobby_code:
                 await self.broadcast_to_lobby_clients(lobby_code, {
                     'type': 'player_reconnected',

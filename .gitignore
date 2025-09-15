@@ -5,3 +5,4 @@ oldversion/
 __pycache__/
 .github/
 DEBUG/
+global_state.db
