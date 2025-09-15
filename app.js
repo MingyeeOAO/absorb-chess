@@ -125,7 +125,7 @@ class ChessApp {
             'wss://chess.harc.qzz.io/ws/'
         ];
         if(UNDER_DEVELOPMENT == false){
-            servers.remove('ws://localhost:8765');
+            servers = servers.filter(server => server !== 'ws://localhost:8765');
         }
 
         for (var serverUrl of servers) {
