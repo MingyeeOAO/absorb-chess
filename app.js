@@ -1,4 +1,4 @@
-const UNDER_DEVELOPMENT = false;
+const UNDER_DEVELOPMENT = true;
 
 class ChessApp {
     constructor() {
@@ -283,18 +283,17 @@ class ChessApp {
     cancelSearch() {
         // Reset search state regardless of current state
         this.isSearchingGame = false;
-        
         // Send cancel message if we were actually searching
         if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-            this.sendMessage({
-                type: 'cancel_search'
-            });
+            this.sendMessage({ type: 'cancel_search' });
         }
-        
+        // Remove all modals (in case any are open)
+        document.querySelectorAll('.modal').forEach(modal => modal.remove());
         // Reset UI to initial state
-        document.getElementById('search-game-form').style.display = 'block';
-        document.getElementById('searching-status').style.display = 'none';
-        
+        const searchGameForm = document.getElementById('search-game-form');
+        if (searchGameForm) searchGameForm.style.display = 'block';
+        const searchingStatus = document.getElementById('searching-status');
+        if (searchingStatus) searchingStatus.style.display = 'none';
         // Go back to main menu
         this.showScreen('main-menu');
     }

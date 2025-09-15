@@ -189,7 +189,8 @@ class GameServer:
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:
-            await self.connection_manager.unregister_client(client_id)
+            # Don't remove from lobby here - let connection manager handle it
+            await self.connection_manager.unregister_client(client_id, remove_from_lobby=False)
     
     async def start(self):
         """Start the game server"""

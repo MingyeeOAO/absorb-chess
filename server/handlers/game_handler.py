@@ -202,19 +202,27 @@ class GameHandler:
             'moves': client_moves
         }
 
-    async def handle_resign(self, client_id: str, websocket):
+    async def handle_resign(self, client_id: str, websocket, lobby_code: str = None):
         """Handle player resignation (works for auto-resign even if player is missing)"""
-        lobby = self.state.get_lobby_by_client(client_id)
+        # If lobby_code is provided (auto-resign case), use it directly
+        if lobby_code:
+            lobby = self.state.get_lobby(lobby_code)
+        else:
+            lobby = self.state.get_lobby_by_client(client_id)
+            
         if not lobby or not lobby.game_state or lobby.game_state.get('game_over'):
             return None
 
-        # Find the resigning player
+        # Find the resigning player in the lobby
         resigning_player = None
         for player in lobby.players:
             if player.id == client_id:
                 resigning_player = player
                 break
 
+
+        if not resigning_player:
+            return None
         
         winner_color = 'black' if resigning_player.color.value == 'white' else 'white'
 

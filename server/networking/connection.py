@@ -101,17 +101,38 @@ class ConnectionManager:
             if client_id in self.connection_check_tasks:
                 self.connection_check_tasks[client_id].cancel()
                 del self.connection_check_tasks[client_id]
-            # Only handle disconnect if no auto-resign task is pending
-            if client_id not in self.auto_resign_tasks:
-                await self.handle_disconnect(client_id)
-            else:
-                # Just remove from websocket connections, keep in lobby for auto-resign
-                if client_id in self.state.connected_clients:
-                    del self.state.connected_clients[client_id]
+            
+            # Close websocket immediately but don't clean up state yet
+            if client_id in self.state.connected_clients:
+                try:
+                    websocket = self.state.connected_clients[client_id]
+                    await websocket.close()
+                except Exception:
+                    pass
+                # Remove from connected_clients but keep everything else
+                del self.state.connected_clients[client_id]
+            
+            # Always call handle_disconnect - it will manage the cleanup timing
+            await self.handle_disconnect(client_id)
             
         return client_id
     
-    async def unregister_client(self, client_id: str):
+    async def broadcast_to_lobby_clients(self, lobby_code: str, message: dict, exclude_client_id: str = None):
+        """Send a message to all clients in the specified lobby except the excluded one"""
+        lobby = self.state.get_lobby(lobby_code)
+        if not lobby:
+            return
+        for player in lobby.players:
+            if player.id != exclude_client_id:
+                ws = self.state.get_client_websocket(player.id)
+                if ws:
+                    try:
+                        await ws.send(json.dumps(message))
+                    except Exception:
+                        pass
+
+
+    async def unregister_client(self, client_id: str, remove_from_lobby: bool = True):
         """Unregister a client and clean up"""
         if client_id in self.state.connected_clients:
             try:
@@ -119,77 +140,83 @@ class ConnectionManager:
                 await websocket.close()
             except Exception:
                 pass
-        self.state.unregister_client(client_id)
+        self.state.unregister_client(client_id, remove_from_lobby=remove_from_lobby)
     
 
 
     async def handle_disconnect(self, client_id: str):
         """Handle client disconnection and auto-resign after 40 seconds"""
+        # If auto-resign is already running for this client, don't start another one
+        if client_id in self.auto_resign_tasks:
+            return
+            
         timestamp = datetime.datetime.now()
         abort_time = timestamp + datetime.timedelta(seconds=40)
-        await self.broadcast_to_clients({
-            'type': 'player_disconnected',
-            'playerId': client_id,
-            'disconnect_time': int(timestamp.timestamp()),
-            'abort_time': int(abort_time.timestamp())
-        }, exclude_client_id=client_id)
-
-        # Cancel any previous auto-resign task
-        if client_id in self.auto_resign_tasks:
-            self.auto_resign_tasks[client_id].cancel()
-            del self.auto_resign_tasks[client_id]
+        
+        # Capture lobby code before any cleanup - this is crucial
+        lobby_code = self.state.client_lobby_map.get(client_id)
+        
+        # Only broadcast to clients in the same lobby as the disconnecting player
+        if lobby_code:
+            await self.broadcast_to_lobby_clients(lobby_code, {
+                'type': 'player_disconnected',
+                'playerId': client_id,
+                'disconnect_time': int(timestamp.timestamp()),
+                'abort_time': int(abort_time.timestamp())
+            }, exclude_client_id=client_id)
 
         # Schedule auto-resign/game over after 40 seconds
         async def auto_resign():
             try:
                 await asyncio.sleep(40)
-                # Only resign if game is still active
-                lobby = self.state.get_lobby_by_client(client_id)
-                # print(f"[Auto-Resign] {client_id}")
-                # print(f"[Auto-Resign] Lobby found: {lobby is not None}")
-                # if lobby:
-                #     print(f"[Auto-Resign] Game state exists: {lobby.game_state is not None}")
-                #     if lobby.game_state:
-                #         print(f"[Auto-Resign] Game over: {lobby.game_state.get('game_over')}")
-                #         print(f"[Auto-Resign] Players in lobby: {[p.id for p in lobby.players]}")
                 
-                if lobby and lobby.game_state and not lobby.game_state.get('game_over'):
-                    # print(f"[Auto-Resign] Calling handle_resign for {client_id}")
-                    response = await self.game_handler.handle_resign(client_id, None)
-                    # print(f"[Auto-Resign] Response: {response}")
-                    if response:
-                        # Force reason to 'disconnect' for clarity
-                        response['reason'] = 'disconnect'
-                        # print(f"[Auto-Resign] Broadcasting game_over: {response}")
-                        await self.broadcast_to_clients(response)
-                    # else:
-                    #     print(f"[Auto-Resign] handle_resign returned None")
-                # else:
-                #    print(f"[Auto-Resign] Conditions not met - no resignation")
-                # Clean up the client after auto-resign is processed
-                await self.unregister_client(client_id)
+                # Just use the lobby_code we captured earlier - much simpler!
+                if lobby_code:
+                    lobby = self.state.get_lobby(lobby_code)
+                    print(f"[Auto-Resign] lobby: {lobby}, player: {client_id}")
+                    print(f"[Auto-Resign] using lobby_code: {lobby_code}")
+                    
+                    # Only resign if game is still active
+                    if lobby and lobby.game_state and not lobby.game_state.get('game_over'):
+                        response = await self.game_handler.handle_resign(client_id, None, lobby_code)
+                        print(f"[Auto-Resign] handle_resign response: {response}")
+                        if response:
+                            response['reason'] = 'disconnect'
+                            print(f"[Auto-Resign] broadcasting to lobby_code: {lobby_code}")
+                            await self.broadcast_to_lobby_clients(lobby_code, response)
+                
+                # NOW clean up everything - after auto-resign is complete
+                print(f"[Auto-Resign] Cleaning up client {client_id}")
+                await self.unregister_client(client_id, remove_from_lobby=True)
+                
             except asyncio.CancelledError:
-                # If cancelled (reconnected), still clean up
-                await self.unregister_client(client_id)
+                # If cancelled (reconnected), don't clean up - client is still active
+                print(f"[Auto-Resign] Cancelled for client {client_id} - client reconnected")
+            finally:
+                # Remove from auto_resign_tasks
+                if client_id in self.auto_resign_tasks:
+                    del self.auto_resign_tasks[client_id]
 
         task = asyncio.create_task(auto_resign())
         self.auto_resign_tasks[client_id] = task
-
-        # Don't unregister immediately - let auto_resign handle it
         
     async def handle_reconnection(self, client_id: str):
         """Handle client reconnection and cancel auto-resign"""
         # Cancel auto-resign if scheduled
-        if hasattr(self, 'auto_resign_tasks') and client_id in self.auto_resign_tasks:
+        if client_id in self.auto_resign_tasks:
             self.auto_resign_tasks[client_id].cancel()
             del self.auto_resign_tasks[client_id]
+            print(f"[Reconnection] Cancelled auto-resign for {client_id}")
+        
         if client_id in self.state.connected_clients:
             timestamp = datetime.datetime.now()
-            await self.broadcast_to_clients({
-                'type': 'player_reconnected',
-                'player_id': client_id,
-                'timestamp': timestamp.isoformat()
-            }, exclude_client_id=client_id)
+            lobby_code = self.state.client_lobby_map.get(client_id)
+            if lobby_code:
+                await self.broadcast_to_lobby_clients(lobby_code, {
+                    'type': 'player_reconnected',
+                    'player_id': client_id,
+                    'timestamp': timestamp.isoformat()
+                }, exclude_client_id=client_id)
 
     async def handle_client(self, client_id: str, websocket):
         """Register a new client and start monitoring their connection"""

@@ -66,7 +66,7 @@ class GlobalState:
         self.missed_checks[client_id] = 0
         self.update_client_state(client_id, 'idle')
 
-    def unregister_client(self, client_id: str):
+    def unregister_client(self, client_id: str, remove_from_lobby: bool = True):
         """Remove a client when they disconnect"""
         if client_id in self.connected_clients:
             del self.connected_clients[client_id]
@@ -75,7 +75,8 @@ class GlobalState:
         if client_id in self.missed_checks:
             del self.missed_checks[client_id]
         self.remove_searching_player(client_id)
-        self.remove_player_from_lobby(client_id)
+        if remove_from_lobby:
+            self.remove_player_from_lobby(client_id)
         if client_id in self.client_states:
             del self.client_states[client_id]
 
