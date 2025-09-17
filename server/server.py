@@ -15,7 +15,9 @@ class GameServer:
     def __init__(self, host: str = "0.0.0.0", port: int = 8765):
         self.host = host
         self.port = port
+        # Create game_handler first
         self.game_handler = GameHandler()
+        # Create connection_manager without game_handler dependency
         self.connection_manager = ConnectionManager(game_handler=self.game_handler, message_handler=self.handle_message)
         self.lobby_handler = LobbyHandler(self.connection_manager)
         self.search_handler = SearchHandler(self.connection_manager, self.lobby_handler)
@@ -126,7 +128,16 @@ class GameServer:
                     else:
                         # For all other move responses, send to all players
                         for player in lobby.players:
-                            await self.connection_manager.send_message(player.websocket, response)
+                            if hasattr(player, 'websocket') and player.websocket:  # Check for bot players
+                                await self.connection_manager.send_message(player.websocket, response)
+                
+                # After processing all responses, check if bot should move
+                if lobby.has_bot and not lobby.game_state.get('game_over'):
+                    print(f"[DEBUG] Scheduling bot move for lobby {lobby.code}")
+                    # Schedule bot move after a short delay to allow frontend to update
+                    asyncio.create_task(self._schedule_bot_move(lobby.code))
+                else:
+                    print(f"[DEBUG] Not scheduling bot move: has_bot={lobby.has_bot}, game_over={lobby.game_state.get('game_over')}")
                     
         elif message_type == 'get_valid_moves':
             lobby = self.lobby_handler.get_lobby_by_client(client_id)
@@ -189,6 +200,30 @@ class GameServer:
                     self.state.update_lobby_game_state(lobby.code, response['game_state'])
                     for player in lobby.players:
                         await self.connection_manager.send_message(player.websocket, response)
+                        
+        elif message_type == 'swap_colors':
+            response = await self.lobby_handler.swap_colors(client_id, websocket, data)
+            if response:
+                lobby = self.lobby_handler.get_lobby_by_client(client_id)
+                if lobby:
+                    for player in lobby.players:
+                        if hasattr(player, 'websocket') and player.websocket:  # Check for bot players
+                            # Personalize is_owner for each player
+                            player_response = response.copy()
+                            player_response['is_owner'] = player.id == lobby.owner_id
+                            await self.connection_manager.send_message(player.websocket, player_response)
+                            
+        elif message_type == 'randomize_colors':
+            response = await self.lobby_handler.randomize_colors(client_id, websocket, data)
+            if response:
+                lobby = self.lobby_handler.get_lobby_by_client(client_id)
+                if lobby:
+                    for player in lobby.players:
+                        if hasattr(player, 'websocket') and player.websocket:  # Check for bot players
+                            # Personalize is_owner for each player
+                            player_response = response.copy()
+                            player_response['is_owner'] = player.id == lobby.owner_id
+                            await self.connection_manager.send_message(player.websocket, player_response)
     
     async def client_handler(self, websocket):
         """Handle new client connections"""
@@ -208,6 +243,22 @@ class GameServer:
         finally:
             # Don't remove from lobby here - let connection manager handle it
             await self.connection_manager.unregister_client(client_id, remove_from_lobby=False)
+    
+    async def _schedule_bot_move(self, lobby_code: str):
+        """Schedule a bot move after a short delay"""
+        print(f"[DEBUG] _schedule_bot_move called for lobby {lobby_code}")
+        await asyncio.sleep(1)  # 1 second delay for better UX
+        print(f"[DEBUG] About to call handle_bot_move for lobby {lobby_code}")
+        move_result = await self.game_handler.handle_bot_move(lobby_code)
+        #print(f"[DEBUG] handle_bot_move returned: {move_result}")
+        
+        # If bot made a move, broadcast it to all players
+        if move_result:
+            lobby = self.state.get_lobby(lobby_code)
+            if lobby:
+                for player in lobby.players:
+                    if hasattr(player, 'websocket') and player.websocket:  # Check for bot players
+                        await self.connection_manager.send_message(player.websocket, move_result)
     
     async def start(self):
         """Start the game server"""

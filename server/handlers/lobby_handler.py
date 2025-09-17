@@ -1,7 +1,8 @@
+import asyncio
 import datetime
 import uuid
 from typing import Dict, Optional
-from server.core.models import Lobby, Player
+from server.core.models import Lobby, Player, BotPlayer
 from server.core.enums import Color
 from server.core.game import ChessGame
 from server.core.state import GlobalState
@@ -29,17 +30,29 @@ class LobbyHandler:
         """Create a new lobby"""
         lobby_code = self.generate_lobby_code()
         player_name = data.get('player_name', 'Player')
+        with_bot = data.get('with_bot', False)
         
         # Store player name in client state for reconstruction later
         self.state.update_client_state(client_id, 'in_lobby', player_name=player_name, lobby_code=lobby_code)
         
+        players = [Player(client_id, player_name, Color.WHITE, websocket)]
+        
+        # Add bot if requested
+        if with_bot:
+            bot_id = f"bot_{lobby_code}"
+            bot_player = BotPlayer(bot_id, "Chess Bot", Color.BLACK)
+            players.append(bot_player)
+            # Add bot to client_lobby_map
+            self.state.add_player_to_lobby(bot_id, lobby_code, Color.BLACK.value)
+        
         lobby = Lobby(
             code=lobby_code,
             owner_id=client_id,
-            players=[Player(client_id, player_name, Color.WHITE, websocket)],
+            players=players,
             game_state=None,
             settings=data.get('settings', {}),
-            created_at=datetime.datetime.now()
+            created_at=datetime.datetime.now(),
+            has_bot=with_bot
         )
         
         self.state.add_lobby(lobby_code, lobby)
@@ -54,7 +67,8 @@ class LobbyHandler:
                 'players': [{'id': p.id, 'name': p.name, 'color': p.color.value} 
                           for p in lobby.players],
                 'settings': lobby.settings,
-                'is_owner': True
+                'is_owner': True,
+                'has_bot': with_bot
             }
         }
     
@@ -99,7 +113,10 @@ class LobbyHandler:
         # Send lobby update to all remaining players
         for p in lobby.players:
             if hasattr(p, 'websocket') and p.websocket:
-                await self.connection_manager.send_message(p.websocket, lobby_update)
+                # Add is_owner specific to each player
+                player_specific_update = lobby_update.copy()
+                player_specific_update['is_owner'] = p.id == lobby.owner_id
+                await self.connection_manager.send_message(p.websocket, player_specific_update)
         return lobby_update
 
 
@@ -138,8 +155,8 @@ class LobbyHandler:
             'type': 'lobby_update',
             'lobby_code': lobby_code,
             'players': lobby_data['players'],
-            'settings': lobby.settings,
-            'is_owner': False  # Existing players keep their owner status unchanged
+            'settings': lobby.settings
+            # Note: is_owner will be set per-player in server.py when broadcasting
         }
 
         # Message specifically for the joining player
@@ -222,7 +239,17 @@ class LobbyHandler:
                             'lobby_code': lobby.code
                         }
                     }
-                    await self.connection_manager.send_message(player.websocket, response)
+                    if hasattr(player, 'websocket') and player.websocket:  # Check for bot players
+                        await self.connection_manager.send_message(player.websocket, response)
+                
+                # Check if bot should make the first move (white always goes first)
+                if lobby.has_bot:
+                    for player in lobby.players:
+                        if isinstance(player, BotPlayer) and player.color.value == 'white':
+                            # Schedule bot move after a short delay
+                            import asyncio
+                            asyncio.create_task(self._schedule_bot_first_move(lobby.code))
+                            break
                 
                 # Return None since we've handled the messaging
                 return None
@@ -256,3 +283,72 @@ class LobbyHandler:
             else:
                 # Clean up empty lobby
                 self.state.remove_lobby(lobby.code)
+                
+    async def swap_colors(self, client_id: str, websocket, data: dict) -> Optional[dict]:
+        """Swap colors of players in lobby (owner only)"""
+        lobby = self.get_lobby_by_client(client_id)
+        if not lobby or lobby.owner_id != client_id or len(lobby.players) != 2:
+            return None
+            
+        # Swap colors
+        lobby.players[0].color, lobby.players[1].color = lobby.players[1].color, lobby.players[0].color
+        
+        # Update player colors in database
+        color_mapping = {
+            lobby.players[0].id: lobby.players[0].color.value,
+            lobby.players[1].id: lobby.players[1].color.value
+        }
+        self.state.update_lobby_player_colors(lobby.code, color_mapping)
+        
+        # Notify all players
+        return {
+            'type': 'lobby_update',
+            'lobby_code': lobby.code,
+            'players': [{'id': p.id, 'name': p.name, 'color': p.color.value} for p in lobby.players],
+            'settings': lobby.settings
+        }
+        
+    async def randomize_colors(self, client_id: str, websocket, data: dict) -> Optional[dict]:
+        """Randomly assign colors to players in lobby (owner only)"""
+        lobby = self.get_lobby_by_client(client_id)
+        if not lobby or lobby.owner_id != client_id or len(lobby.players) != 2:
+            return None
+            
+        # Randomly assign colors
+        import random
+        colors = [Color.WHITE, Color.BLACK]
+        random.shuffle(colors)
+        
+        lobby.players[0].color = colors[0]
+        lobby.players[1].color = colors[1]
+        
+        # Update player colors in database
+        color_mapping = {
+            lobby.players[0].id: lobby.players[0].color.value,
+            lobby.players[1].id: lobby.players[1].color.value
+        }
+        self.state.update_lobby_player_colors(lobby.code, color_mapping)
+        
+        # Notify all players
+        return {
+            'type': 'lobby_update',
+            'lobby_code': lobby.code,
+            'players': [{'id': p.id, 'name': p.name, 'color': p.color.value} for p in lobby.players],
+            'settings': lobby.settings
+        }
+    
+    async def _schedule_bot_first_move(self, lobby_code: str):
+        """Schedule the first bot move after game start"""
+        await asyncio.sleep(2)  # 2 seconds delay to let UI settle
+        # Import here to avoid circular imports
+        from server.handlers.game_handler import GameHandler
+        game_handler = GameHandler()
+        move_result = await game_handler.handle_bot_move(lobby_code)
+        
+        # If bot made a move, broadcast it to all players
+        if move_result:
+            lobby = self.state.get_lobby(lobby_code)
+            if lobby:
+                for player in lobby.players:
+                    if hasattr(player, 'websocket') and player.websocket:  # Check for bot players
+                        await self.connection_manager.send_message(player.websocket, move_result)

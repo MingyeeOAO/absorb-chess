@@ -1,4 +1,6 @@
 from typing import Dict, List, Optional, Tuple
+
+from sympy import PoleError
 from .enums import PieceType, Color
 from .piece import Piece
 import datetime
@@ -18,6 +20,8 @@ class ChessGame:
         self._initialize_board()
         self.white_ms = 0
         self.black_ms = 0
+        #self.pieces = []  # List to track all pieces on the board
+        self.king_castled = {Color.WHITE: False, Color.BLACK: False}  # Track if each king has castled
 
     def load_from_state(self, game_state: Dict):
         """Load game state from a dictionary, ensuring clock fields are always initialized"""
@@ -26,6 +30,7 @@ class ChessGame:
             for col in range(8):
                 pdata = game_state['board'][row][col]
                 self.board[row][col] = Piece.from_dict(pdata) if pdata else None
+                # self.pieces.append(self.board[row][col]) if self.board[row][col] else None
 
         self.current_turn = Color(game_state['current_turn']) if isinstance(game_state['current_turn'], str) else game_state['current_turn']
         self.game_over = game_state.get('game_over', False)
@@ -49,28 +54,38 @@ class ChessGame:
         return self
 
     def calculate_moves(self) -> Dict[tuple, list]:
-        """Calculate all valid moves for all pieces on the board.
-        Returns:
-            Dict[tuple, list]: Dictionary mapping piece positions (row,col) to list of valid moves [(to_row,to_col),...]
-        """
+        """Fast calculation of all valid moves for all pieces of the current turn."""
         moves = {}
-        for row in range(8):
-            for col in range(8):
-                piece = self.get_piece_at(row, col)
-                if piece and piece.color == self.current_turn:
-                    valid_moves = []
-                    for to_row in range(8):
-                        for to_col in range(8):
-                            if (to_row, to_col) == (row, col):
-                                continue
-                            for ability in piece.abilities:
-                                if self._is_valid_move_for_ability(piece, (row, col), (to_row, to_col), ability):
-                                    if self._would_move_put_king_in_check(piece, (row, col), (to_row, to_col)):
-                                        continue
-                                    valid_moves.append((to_row, to_col))
-                                    break
-                    if valid_moves:
-                        moves[(row, col)] = valid_moves
+        color = self.current_turn
+        king_pos = None
+        pieces = []
+        for r in range(8):
+            for c in range(8):
+                p = self.get_piece_at(r, c)
+                if p and p.type == PieceType.KING and p.color == color:
+                    king_pos = (r, c)
+                if p and p.color == color:
+                    pieces.append((r, c, p))
+
+        for row, col, piece in pieces:
+            valid_moves = []
+            pseudo_moves = self._get_valid_moves_for_ability((row, col))
+            for to_row, to_col in pseudo_moves:
+                if (to_row, to_col) in valid_moves:
+                    continue
+                captured = self.board[to_row][to_col]
+                self.board[to_row][to_col] = piece
+                self.board[row][col] = None
+                orig_pos = piece.position
+                piece.position = (to_row, to_col)
+                king_check = self._is_king_in_check(piece.color, king_pos)
+                self.board[row][col] = piece
+                self.board[to_row][to_col] = captured
+                piece.position = orig_pos
+                if not king_check:
+                    valid_moves.append((to_row, to_col))
+            if valid_moves:
+                moves[(row, col)] = valid_moves
         return moves
 
     def _would_move_put_king_in_check(self, piece: 'Piece', from_pos: tuple, to_pos: tuple) -> bool:
@@ -125,25 +140,20 @@ class ChessGame:
         piece = self.get_piece_at(from_row, from_col)
         if not piece or piece.color != self.current_turn:
             return False
-        
         # Basic validation: bounds check and not capturing own piece
         if not (0 <= to_row < 8 and 0 <= to_col < 8) or from_pos == to_pos:
             return False
-        
         target_piece = self.get_piece_at(to_row, to_col)
         if target_piece and target_piece.color == piece.color:
             return False
-        
         # Check piece-specific movement rules
         move_allowed = False
         for ability in piece.abilities:
             if self._is_valid_move_for_ability(piece, from_pos, to_pos, ability):
                 move_allowed = True
                 break
-        
         if not move_allowed:
             return False
-            
         # Simulate move for king-in-check validation
         captured_piece = self.get_piece_at(to_row, to_col)
         self.board[to_row][to_col] = piece
@@ -181,6 +191,8 @@ class ChessGame:
                 self.board[from_row][rook_col] = None
                 rook.position = (from_row, new_rook_col)
                 rook.has_moved = True
+                # Mark king as castled
+                self.king_castled[piece.color] = True
 
         # En passant
         self.valid_moves.clear()
@@ -231,29 +243,121 @@ class ChessGame:
         if not became_promotion:
             self.current_turn = Color.BLACK if self.current_turn == Color.WHITE else Color.WHITE
         return True
-    def calculate_valid_moves_for_turn(self):
-        """Calculate and store valid moves for all pieces of the current turn."""
-        self.valid_moves.clear()
-        for row in range(8):
-            for col in range(8):
-                piece = self.get_piece_at(row, col)
-                if piece and piece.color == self.current_turn:
-                    valid_moves = []
-                    for ability in piece.abilities:
-                        valid_moves.extend(self._get_valid_moves_for_ability((row, col), ability))
-                    if valid_moves:
-                        self.valid_moves[(row, col)] = valid_moves
-
-    def _get_valid_moves_for_ability(self, from_pos, ability):
+   
+    def _get_valid_moves_for_ability(self, from_pos, ability = None) -> List[tuple]:
+        """Efficiently generate valid moves for a piece's ability from a given position."""
         moves = []
         row, col = from_pos
         piece = self.get_piece_at(row, col)
-        for to_row in range(8):
-            for to_col in range(8):
-                if (to_row, to_col) == (row, col):
+        
+        if not piece:
+            return moves
+        if ability is None:
+            for ab in piece.abilities:
+                if(ab == PieceType.ROOK or ab == PieceType.BISHOP) and PieceType.QUEEN in piece.abilities:
                     continue
-                if self._is_valid_move_for_ability(piece, (row, col), (to_row, to_col), ability):
-                    moves.append((to_row, to_col))
+                moves.extend(self._get_valid_moves_for_ability(from_pos, ab))
+        if ability == PieceType.KNIGHT:
+            # All 8 possible knight jumps
+            for dr, dc in [(-2,-1), (-2,1), (-1,-2), (-1,2), (1,-2), (1,2), (2,-1), (2,1)]:
+                r, c = row + dr, col + dc
+                if 0 <= r < 8 and 0 <= c < 8:
+                    target = self.get_piece_at(r, c)
+                    if not target or target.color != piece.color:
+                        moves.append((r, c))
+        elif ability == PieceType.BISHOP:
+            # 4 diagonals
+            for dr, dc in [(-1,-1), (-1,1), (1,-1), (1,1)]:
+                r, c = row + dr, col + dc
+                while 0 <= r < 8 and 0 <= c < 8:
+                    target = self.get_piece_at(r, c)
+                    if not target:
+                        moves.append((r, c))
+                    elif target.color != piece.color:
+                        moves.append((r, c))
+                        break
+                    else:
+                        break
+                    r += dr
+                    c += dc
+        elif ability == PieceType.ROOK:
+            # 4 straight lines
+            for dr, dc in [(-1,0), (1,0), (0,-1), (0,1)]:
+                r, c = row + dr, col + dc
+                while 0 <= r < 8 and 0 <= c < 8:
+                    target = self.get_piece_at(r, c)
+                    if not target:
+                        moves.append((r, c))
+                    elif target.color != piece.color:
+                        moves.append((r, c))
+                        break
+                    else:
+                        break
+                    r += dr
+                    c += dc
+        elif ability == PieceType.QUEEN:
+            # Combine rook and bishop
+            moves.extend(self._get_valid_moves_for_ability(from_pos, PieceType.ROOK))
+            moves.extend(self._get_valid_moves_for_ability(from_pos, PieceType.BISHOP))
+        elif ability == PieceType.KING:
+            # All adjacent squares
+            for dr in [-1, 0, 1]:
+                for dc in [-1, 0, 1]:
+                    if dr == 0 and dc == 0:
+                        continue
+                    r, c = row + dr, col + dc
+                    if 0 <= r < 8 and 0 <= c < 8:
+                        target = self.get_piece_at(r, c)
+                        if not target or target.color != piece.color:
+                            moves.append((r, c))
+            # Castling
+            if not piece.has_moved:
+                for direction in [-1, 1]:
+                    rook_col = 0 if direction == -1 else 7
+                    rook = self.get_piece_at(row, rook_col)
+                    if rook and rook.type == PieceType.ROOK and not rook.has_moved and rook.color == piece.color:
+                        # Check squares between king and rook are empty
+                        clear = True
+                        for c in range(min(col, rook_col) + 1, max(col, rook_col)):
+                            if self.get_piece_at(row, c) is not None:
+                                clear = False
+                                break
+                        if clear:
+                            # King must not be in check and must not pass through attacked squares
+                            through_safe = True
+                            for c in [col + direction, col + 2 * direction]:
+                                if not (0 <= c < 8):
+                                    through_safe = False
+                                    break
+                                if self._square_attacked((row, c), piece.color):
+                                    through_safe = False
+                                    break
+                            if through_safe and not self._is_king_in_check(piece.color, (row, col)):
+                                moves.append((row, col + 2 * direction))
+        elif ability == PieceType.PAWN:
+            direction = -1 if piece.color == Color.WHITE else 1
+            start_row = 6 if piece.color == Color.WHITE else 1
+            # Forward one
+            r, c = row + direction, col
+            if 0 <= r < 8 and self.get_piece_at(r, c) is None:
+                moves.append((r, c))
+                # Forward two from start
+                if row == start_row:
+                    r2 = row + 2 * direction
+                    if 0 <= r2 < 8 and self.get_piece_at(r2, c) is None:
+                        moves.append((r2, c))
+            # Captures
+            for dc in [-1, 1]:
+                r, c2 = row + direction, col + dc
+                if 0 <= r < 8 and 0 <= c2 < 8:
+                    target = self.get_piece_at(r, c2)
+                    if target and target.color != piece.color:
+                        moves.append((r, c2))
+            # En passant
+            if self.en_passant_target:
+                ep_row, ep_col = self.en_passant_target
+                if abs(ep_col - col) == 1 and ep_row == row + direction:
+                    moves.append((ep_row, ep_col))
         return moves
     
     def serialize_board(self):
@@ -531,22 +635,20 @@ class ChessGame:
                 # Stalemate
                 self.winner = None
     
-    def _is_king_in_check(self, king_color: Color) -> bool:
-        """Check if the king of the given color is in check"""
-        # Find the king
-        king_pos = None
-        for row in range(8):
-            for col in range(8):
-                piece = self.get_piece_at(row, col)
-                if piece and piece.type == PieceType.KING and piece.color == king_color:
-                    king_pos = (row, col)
+    def _is_king_in_check(self, king_color: Color, king_pos: Optional[Tuple[int, int]] = None) -> bool:
+        """Check if the king of the given color is in check. If king_pos is provided, use it for speed."""
+        # Use provided king_pos if available, else find the king
+        if king_pos is None:
+            for row in range(8):
+                for col in range(8):
+                    piece = self.get_piece_at(row, col)
+                    if piece and piece.type == PieceType.KING and piece.color == king_color:
+                        king_pos = (row, col)
+                        break
+                if king_pos:
                     break
-            if king_pos:
-                break
-        
         if not king_pos:
             return False
-        
         # Check if any opponent piece can attack the king
         opponent_color = Color.BLACK if king_color == Color.WHITE else Color.WHITE
         for row in range(8):
@@ -556,7 +658,6 @@ class ChessGame:
                     # Check if this piece can attack the king
                     if self._can_attack_king(piece, (row, col), king_pos):
                         return True
-        
         return False
     
     def _can_attack_king(self, piece: Piece, from_pos: tuple, king_pos: tuple) -> bool:
@@ -660,3 +761,138 @@ class ChessGame:
             'promotion_cancel_allowed': True
         }
     
+    def calculate_moves_fast(self) -> Dict[tuple, list]:
+        """High-speed calculation of all legal moves for the current turn."""
+        moves = {}
+        color = self.current_turn
+
+        # Precompute king position
+        king_pos = None
+        pieces = []
+        for r in range(8):
+            for c in range(8):
+                p = self.get_piece_at(r, c)
+                if p and p.color == color:
+                    pieces.append((r, c, p))
+                    if p.type == PieceType.KING:
+                        king_pos = (r, c)
+
+        # Direction vectors for sliding pieces
+        rook_dirs = [(-1,0),(1,0),(0,-1),(0,1)]
+        bishop_dirs = [(-1,-1),(-1,1),(1,-1),(1,1)]
+        queen_dirs = rook_dirs + bishop_dirs
+        knight_offsets = [(-2,-1),(-2,1),(-1,-2),(-1,2),(1,-2),(1,2),(2,-1),(2,1)]
+        king_offsets = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
+
+        for row, col, piece in pieces:
+            valid_moves = set()
+            for ability in piece.abilities:
+                if ability == PieceType.PAWN:
+                    direction = -1 if color == Color.WHITE else 1
+                    start_row = 6 if color == Color.WHITE else 1
+                    # Forward moves
+                    if 0 <= row+direction < 8 and self.get_piece_at(row+direction, col) is None:
+                        valid_moves.add((row+direction, col))
+                        if row == start_row and self.get_piece_at(row+2*direction, col) is None:
+                            valid_moves.add((row+2*direction, col))
+                    # Captures
+                    for dc in [-1, 1]:
+                        nr, nc = row+direction, col+dc
+                        if 0 <= nr < 8 and 0 <= nc < 8:
+                            target = self.get_piece_at(nr, nc)
+                            if target and target.color != color:
+                                valid_moves.add((nr, nc))
+                            elif self.en_passant_target == (nr, nc):
+                                valid_moves.add((nr, nc))
+
+                elif ability == PieceType.ROOK:
+                    for dr, dc in rook_dirs:
+                        r, c = row+dr, col+dc
+                        while 0 <= r < 8 and 0 <= c < 8:
+                            target = self.get_piece_at(r, c)
+                            if target is None:
+                                valid_moves.add((r,c))
+                            else:
+                                if target.color != color:
+                                    valid_moves.add((r,c))
+                                break
+                            r += dr
+                            c += dc
+
+                elif ability == PieceType.BISHOP:
+                    for dr, dc in bishop_dirs:
+                        r, c = row+dr, col+dc
+                        while 0 <= r < 8 and 0 <= c < 8:
+                            target = self.get_piece_at(r, c)
+                            if target is None:
+                                valid_moves.add((r,c))
+                            else:
+                                if target.color != color:
+                                    valid_moves.add((r,c))
+                                break
+                            r += dr
+                            c += dc
+
+                elif ability == PieceType.QUEEN:
+                    for dr, dc in queen_dirs:
+                        r, c = row+dr, col+dc
+                        while 0 <= r < 8 and 0 <= c < 8:
+                            target = self.get_piece_at(r, c)
+                            if target is None:
+                                valid_moves.add((r,c))
+                            else:
+                                if target.color != color:
+                                    valid_moves.add((r,c))
+                                break
+                            r += dr
+                            c += dc
+
+                elif ability == PieceType.KNIGHT:
+                    for dr, dc in knight_offsets:
+                        nr, nc = row+dr, col+dc
+                        if 0 <= nr < 8 and 0 <= nc < 8:
+                            target = self.get_piece_at(nr, nc)
+                            if target is None or target.color != color:
+                                valid_moves.add((nr,nc))
+
+                elif ability == PieceType.KING:
+                    for dr, dc in king_offsets:
+                        nr, nc = row+dr, col+dc
+                        if 0 <= nr < 8 and 0 <= nc < 8:
+                            target = self.get_piece_at(nr, nc)
+                            if target is None or target.color != color:
+                                valid_moves.add((nr,nc))
+                    # Castling
+                    for side in [-1,1]:
+                        rook_col = 0 if side==-1 else 7
+                        rook = self.get_piece_at(row, rook_col)
+                        if rook and rook.type == PieceType.ROOK and not rook.has_moved and not piece.has_moved:
+                            path_clear = True
+                            for c in range(min(col, rook_col)+1, max(col, rook_col)):
+                                if self.get_piece_at(row,c) is not None:
+                                    path_clear = False
+                                    break
+                            if path_clear and not self._is_king_in_check(color, king_pos):
+                                valid_moves.add((row,col+2*side))
+
+            # Filter moves that leave king in check
+            legal_moves = []
+            for to_row, to_col in valid_moves:
+                captured = self.board[to_row][to_col]
+                self.board[to_row][to_col] = piece
+                self.board[row][col] = None
+                orig_pos = piece.position
+                piece.position = (to_row, to_col)
+
+                king_safe = not self._is_king_in_check(color, king_pos)
+
+                self.board[row][col] = piece
+                self.board[to_row][to_col] = captured
+                piece.position = orig_pos
+                if king_safe:
+                    legal_moves.append((to_row,to_col))
+
+            if legal_moves:
+                moves[(row,col)] = legal_moves
+
+        return moves

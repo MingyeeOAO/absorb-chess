@@ -199,6 +199,18 @@ p {
     margin: 20px 0;
 }
 
+.color-controls {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-bottom: 15px;
+}
+
+.color-controls button {
+    padding: 8px 16px;
+    font-size: 0.9rem;
+}
+
 .waiting-message {
     margin: 20px 0;
     font-style: italic;

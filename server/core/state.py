@@ -247,7 +247,7 @@ class GlobalState:
         cur.execute('SELECT * FROM lobbies WHERE lobby_code = ?', (lobby_code,))
         row = cur.fetchone()
         if row:
-            from server.core.models import Lobby, Player
+            from server.core.models import Lobby, Player, BotPlayer
             from server.core.enums import Color
             
             game_state = json.loads(row['game_state']) if row['game_state'] else None
@@ -267,23 +267,46 @@ class GlobalState:
                 client_id = client_row['client_id']
                 stored_color = client_row['player_color']
                 websocket = self.connected_clients.get(client_id)
-                # Include clients even if websocket is None (disconnected but in auto-resign period)
-                if client_id in self.connected_clients:  # Check if client exists in dict
+                
+                # Check if this is a bot player
+                is_bot = client_id.startswith('bot_')
+                
+                # Include clients if they're connected OR if they're bots
+                if client_id in self.connected_clients or is_bot:
                     # Get client state to find player name
                     client_state = self.get_client_state(client_id)
-                    player_name = client_state.get('player_name', 'Player') if client_state else 'Player'
-                    
-                    # Use stored color if available, otherwise fall back to position-based assignment
-                    if stored_color:
-                        player_color = Color.WHITE if stored_color == 'white' else Color.BLACK
+                    if is_bot:
+                        # For bots, use default name and no websocket
+                        player_name = 'Chess Bot'
+                        websocket = None
+                        from server.core.models import BotPlayer
+                        # Use stored color if available, otherwise fall back to position-based assignment
+                        if stored_color:
+                            player_color = Color.WHITE if stored_color == 'white' else Color.BLACK
+                        else:
+                            # Fallback for legacy data without stored colors
+                            player_color = Color.WHITE if len(players) == 0 else Color.BLACK
+                        
+                        player = BotPlayer(client_id, player_name, player_color)
                     else:
-                        # Fallback for legacy data without stored colors
-                        player_color = Color.WHITE if len(players) == 0 else Color.BLACK
+                        # For human players
+                        player_name = client_state.get('player_name', 'Player') if client_state else 'Player'
+                        
+                        # Use stored color if available, otherwise fall back to position-based assignment
+                        if stored_color:
+                            player_color = Color.WHITE if stored_color == 'white' else Color.BLACK
+                        else:
+                            # Fallback for legacy data without stored colors
+                            player_color = Color.WHITE if len(players) == 0 else Color.BLACK
+                        
+                        player = Player(client_id, player_name, player_color, websocket)
                     
-                    player = Player(client_id, player_name, player_color, websocket)
                     players.append(player)
             
-            lobby = Lobby(code=row['lobby_code'], owner_id=row['owner_id'], players=players, game_state=game_state, settings=settings, created_at=created_at)
+            # Determine if lobby has a bot by checking if any player is a BotPlayer
+            has_bot = any(isinstance(player, BotPlayer) for player in players)
+            
+            lobby = Lobby(code=row['lobby_code'], owner_id=row['owner_id'], players=players, game_state=game_state, settings=settings, created_at=created_at, has_bot=has_bot)
             return lobby
         return None
 
@@ -315,7 +338,7 @@ class GlobalState:
         cur.execute('SELECT * FROM lobbies')
         rows = cur.fetchall()
         lobbies = {}
-        from server.core.models import Lobby, Player
+        from server.core.models import Lobby, Player, BotPlayer
         from server.core.enums import Color
         
         for row in rows:
@@ -339,22 +362,45 @@ class GlobalState:
                 client_id = client_row['client_id']
                 stored_color = client_row['player_color']
                 websocket = self.connected_clients.get(client_id)
-                # Include all clients in the lobby, regardless of connection status
-                # Get client state to find player name
-                client_state = self.get_client_state(client_id)
-                player_name = client_state.get('player_name', 'Player') if client_state else 'Player'
                 
-                # Use stored color if available, otherwise fall back to position-based assignment
-                if stored_color:
-                    player_color = Color.WHITE if stored_color == 'white' else Color.BLACK
+                # Check if this is a bot player
+                is_bot = client_id.startswith('bot_')
+                
+                if is_bot:
+                    # For bots, use default name and no websocket
+                    player_name = 'Chess Bot'
+                    websocket = None
+                    from server.core.models import BotPlayer
+                    # Use stored color if available, otherwise fall back to position-based assignment
+                    if stored_color:
+                        player_color = Color.WHITE if stored_color == 'white' else Color.BLACK
+                    else:
+                        # Fallback for legacy data without stored colors
+                        player_color = Color.WHITE if len(players) == 0 else Color.BLACK
+                    
+                    player = BotPlayer(client_id, player_name, player_color)
                 else:
-                    # Fallback for legacy data without stored colors
-                    player_color = Color.WHITE if len(players) == 0 else Color.BLACK
+                    # For human players
+                    # Include all clients in the lobby, regardless of connection status
+                    # Get client state to find player name
+                    client_state = self.get_client_state(client_id)
+                    player_name = client_state.get('player_name', 'Player') if client_state else 'Player'
+                    
+                    # Use stored color if available, otherwise fall back to position-based assignment
+                    if stored_color:
+                        player_color = Color.WHITE if stored_color == 'white' else Color.BLACK
+                    else:
+                        # Fallback for legacy data without stored colors
+                        player_color = Color.WHITE if len(players) == 0 else Color.BLACK
+                    
+                    player = Player(client_id, player_name, player_color, websocket)
                 
-                player = Player(client_id, player_name, player_color, websocket)
                 players.append(player)
             
-            lobby = Lobby(code=lobby_code, owner_id=row['owner_id'], players=players, game_state=game_state, settings=settings, created_at=created_at)
+            # Determine if lobby has a bot by checking if any player is a BotPlayer
+            has_bot = any(isinstance(player, BotPlayer) for player in players)
+            
+            lobby = Lobby(code=lobby_code, owner_id=row['owner_id'], players=players, game_state=game_state, settings=settings, created_at=created_at, has_bot=has_bot)
             lobbies[lobby_code] = lobby
         return lobbies
 
@@ -378,4 +424,18 @@ class GlobalState:
         """Update lobby owner in DB"""
         cur = self._db_conn.cursor()
         cur.execute('UPDATE lobbies SET owner_id = ? WHERE lobby_code = ?', (new_owner_id, lobby_code))
+        self._db_conn.commit()
+    
+    def update_player_color(self, client_id: str, new_color: str):
+        """Update a player's color in the database"""
+        cur = self._db_conn.cursor()
+        cur.execute('UPDATE client_lobby_map SET player_color = ? WHERE client_id = ?', (new_color, client_id))
+        self._db_conn.commit()
+    
+    def update_lobby_player_colors(self, lobby_code: str, player_color_mapping: dict):
+        """Update multiple player colors for a lobby"""
+        cur = self._db_conn.cursor()
+        for client_id, color in player_color_mapping.items():
+            cur.execute('UPDATE client_lobby_map SET player_color = ? WHERE client_id = ? AND lobby_code = ?', 
+                       (color, client_id, lobby_code))
         self._db_conn.commit()

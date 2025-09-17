@@ -131,8 +131,8 @@ class ConnectionManager:
                 # Just use the lobby_code we captured earlier - much simpler!
                 if lobby_code:
                     lobby = self.state.get_lobby(lobby_code)
-                    print(f"[Auto-Resign] lobby: {lobby}, player: {client_id}")
-                    print(f"[Auto-Resign] using lobby_code: {lobby_code}")
+                    # print(f"[Auto-Resign] lobby: {lobby}, player: {client_id}")
+                    # print(f"[Auto-Resign] using lobby_code: {lobby_code}")
                     
                     # Only resign if game is still active
                     if lobby and lobby.game_state and not lobby.game_state.get('game_over'):

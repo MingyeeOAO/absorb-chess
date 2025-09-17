@@ -1,4 +1,4 @@
-const UNDER_DEVELOPMENT = false;
+const UNDER_DEVELOPMENT = true;
 
 class ChessApp {
     constructor() {
@@ -21,6 +21,7 @@ class ChessApp {
         this.disconnectionTimer = null;
         this.disconnectionCountdown = null;
         this.heartbeatTimer = null;
+        this.isCreatingBotGame = false; // Track if we're creating a bot game
         
         this.initializeEventListeners();
         this.loadTextureSet('classic').then(() => {
@@ -40,6 +41,13 @@ class ChessApp {
 
         document.getElementById('search-game-btn').addEventListener('click', () => {
             this.showScreen('search-game');
+        });
+        
+        document.getElementById('play-bot-btn').addEventListener('click', () => {
+            this.isCreatingBotGame = true;
+            this.showScreen('create-lobby');
+            // Pre-fill settings for bot game
+            document.getElementById('player-name-create').focus();
         });
         
         // Back buttons
@@ -65,6 +73,14 @@ class ChessApp {
         // Lobby controls
         document.getElementById('start-game-btn').addEventListener('click', () => {
             this.startGame();
+        });
+        
+        document.getElementById('swap-colors-btn').addEventListener('click', () => {
+            this.swapColors();
+        });
+        
+        document.getElementById('random-colors-btn').addEventListener('click', () => {
+            this.randomizeColors();
         });
         
         document.getElementById('leave-lobby-btn').addEventListener('click', () => {
@@ -349,8 +365,12 @@ class ChessApp {
                 settings: {
                     time_minutes: timeMinutes,
                     time_increment_seconds: timeIncrement,
-                }
+                },
+                with_bot: this.isCreatingBotGame // Add bot flag
             });
+            
+            // Reset bot game flag
+            this.isCreatingBotGame = false;
         } catch (error) {
             console.error('Failed to create lobby:', error);
         }
@@ -388,6 +408,18 @@ class ChessApp {
     startGame() {
         if (this.isOwner) {
             this.sendMessage({ type: 'start_game' });
+        }
+    }
+    
+    swapColors() {
+        if (this.isOwner) {
+            this.sendMessage({ type: 'swap_colors' });
+        }
+    }
+    
+    randomizeColors() {
+        if (this.isOwner) {
+            this.sendMessage({ type: 'randomize_colors' });
         }
     }
     

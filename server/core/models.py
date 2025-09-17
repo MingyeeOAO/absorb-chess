@@ -11,6 +11,17 @@ class Player:
     color: Color
     websocket: websockets.WebSocketServerProtocol
 
+@dataclass 
+class BotPlayer:
+    id: str
+    name: str
+    color: Color
+    websocket: Optional[websockets.WebSocketServerProtocol] = None  # Bots don't have websockets
+    
+    def __post_init__(self):
+        # Ensure bot has a None websocket
+        self.websocket = None
+
 @dataclass
 class Lobby:
     code: str
@@ -19,3 +30,4 @@ class Lobby:
     game_state: Optional[Dict]
     settings: Dict
     created_at: datetime.datetime
+    has_bot: bool = False  # Track if lobby contains a bot
