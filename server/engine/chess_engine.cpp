@@ -580,10 +580,12 @@ ChessEngine::MoveUndo ChessEngine::apply_move(const Move& move) {
     if (eval_cache_valid) {
         undo_info.material_delta = calculate_material_delta(move);
         undo_info.king_safety_delta = calculate_king_safety_delta(move);
+        undo_info.mobility_delta = calculate_mobility_delta(move);
         
         // Update cached evaluation incrementally
         cached_material_eval += undo_info.material_delta;
         cached_king_safety_eval += undo_info.king_safety_delta;
+        cached_mobility_eval += undo_info.mobility_delta;
     }
     
     // Handle special moves
@@ -671,6 +673,7 @@ void ChessEngine::undo_move(const Move& move, const MoveUndo& undo_info) {
     if (undo_info.old_eval_cache_valid) {
         cached_material_eval -= undo_info.material_delta;
         cached_king_safety_eval -= undo_info.king_safety_delta;
+        cached_mobility_eval -= undo_info.mobility_delta;
         eval_cache_valid = true;
     } else {
         eval_cache_valid = false;
@@ -779,7 +782,7 @@ int ChessEngine::evaluate_position() const {
     
     int material_score = cached_material_eval;
     int king_safety_score = cached_king_safety_eval;
-    int mobility_score = evaluate_mobility();  // Mobility is harder to cache incrementally, so compute fresh
+    int mobility_score = cached_mobility_eval;  // Now using cached mobility
     
     int total_score = material_score + mobility_score + king_safety_score;
     
@@ -992,10 +995,80 @@ int ChessEngine::calculate_king_safety_delta(const Move& move) const {
     return delta;
 }
 
+int ChessEngine::calculate_mobility_delta(const Move& move) const {
+    /*
+     * Fast mobility evaluation delta calculation:
+     * Mobility changes are complex to calculate incrementally because:
+     * 1. Moving a piece changes its mobility
+     * 2. Moving a piece may unblock/block other pieces' mobility
+     * 3. Capturing a piece removes its mobility but may open lines for others
+     * 
+     * For performance, we approximate the delta by calculating:
+     * - Change in mobility of the moving piece
+     * - Change in mobility due to capture (if any)
+     * - Simple approximation of blocking/unblocking effects
+     */
+    
+    int delta = 0;
+    uint32_t moving_piece = state.board[move.from_row][move.from_col];
+    uint32_t captured_piece = state.board[move.to_row][move.to_col];
+    bool is_white_move = (moving_piece & IS_WHITE) != 0;
+    
+    // Estimate mobility change for the moving piece
+    // This is a simplified approximation - exact calculation would require generating all moves
+    int piece_mobility_bonus = 0;
+    uint32_t piece_type = moving_piece & (PIECE_PAWN | PIECE_KNIGHT | PIECE_BISHOP | PIECE_ROOK | PIECE_QUEEN | PIECE_KING);
+    
+    // Sliding pieces gain more mobility in center, lose mobility on edges
+    if (piece_type & (PIECE_BISHOP | PIECE_ROOK | PIECE_QUEEN)) {
+        // Center squares give more mobility
+        int from_centrality = std::min((int)move.from_row, 7 - (int)move.from_row) + std::min((int)move.from_col, 7 - (int)move.from_col);
+        int to_centrality = std::min((int)move.to_row, 7 - (int)move.to_row) + std::min((int)move.to_col, 7 - (int)move.to_col);
+        piece_mobility_bonus = (to_centrality - from_centrality) * 2;
+    }
+    
+    // Knight mobility based on distance from center
+    if (piece_type & PIECE_KNIGHT) {
+        int from_center_dist = abs(move.from_row - 3) + abs(move.from_col - 3) + abs(move.from_row - 4) + abs(move.from_col - 4);
+        int to_center_dist = abs(move.to_row - 3) + abs(move.to_col - 3) + abs(move.to_row - 4) + abs(move.to_col - 4);
+        piece_mobility_bonus = (from_center_dist - to_center_dist) * 1;  // Knights prefer center
+    }
+    
+    if (is_white_move) {
+        delta += piece_mobility_bonus;
+    } else {
+        delta -= piece_mobility_bonus;
+    }
+    
+    // If capturing, remove captured piece's mobility
+    if (captured_piece != 0) {
+        int captured_mobility_loss = 0;
+        uint32_t captured_type = captured_piece & (PIECE_PAWN | PIECE_KNIGHT | PIECE_BISHOP | PIECE_ROOK | PIECE_QUEEN | PIECE_KING);
+        
+        // Estimate lost mobility based on piece type and position
+        if (captured_type & PIECE_QUEEN) captured_mobility_loss = 15;
+        else if (captured_type & PIECE_ROOK) captured_mobility_loss = 8;
+        else if (captured_type & PIECE_BISHOP) captured_mobility_loss = 7;
+        else if (captured_type & PIECE_KNIGHT) captured_mobility_loss = 4;
+        else if (captured_type & PIECE_PAWN) captured_mobility_loss = 2;
+        else if (captured_type & PIECE_KING) captured_mobility_loss = 3;
+        
+        if (captured_piece & IS_WHITE) {
+            delta -= captured_mobility_loss;  // White piece captured
+        } else {
+            delta += captured_mobility_loss;  // Black piece captured
+        }
+    }
+    
+    // Simple approximation: multiply by mobility weight factor (3)
+    return delta * 3;
+}
+
 void ChessEngine::update_eval_cache() const {
     if (!eval_cache_valid) {
         cached_material_eval = evaluate_material();
         cached_king_safety_eval = evaluate_king_safety();
+        cached_mobility_eval = evaluate_mobility();
         eval_cache_valid = true;
     }
 }

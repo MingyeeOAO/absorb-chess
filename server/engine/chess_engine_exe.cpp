@@ -52,7 +52,8 @@ public:
                     } else {
                         std::cout << "MOVE " << result.from_row << " " << result.from_col 
                                  << " " << result.to_row << " " << result.to_col 
-                                 << " " << result.evaluation << " " << result.time_taken_ms << std::endl;
+                                 << " " << result.evaluation << " " << result.time_taken_ms 
+                                 << " " << result.flags << std::endl;
                     }
                 } else {
                     std::cout << "ERROR Invalid board state" << std::endl;
@@ -128,6 +129,7 @@ private:
     struct MoveResult {
         int evaluation;
         int from_row, from_col, to_row, to_col;
+        int flags;  // Promotion flags (4=Queen, 5=Rook, 6=Bishop, 7=Knight)
         int depth_reached;
         int nodes_searched;
         int time_taken_ms;
@@ -148,6 +150,7 @@ private:
         result.from_col = best_move.from_col;
         result.to_row = best_move.to_row;
         result.to_col = best_move.to_col;
+        result.flags = best_move.flags;  // Include promotion flags
         result.depth_reached = depth;
         result.nodes_searched = 0; // Engine doesn't track this yet
         result.time_taken_ms = static_cast<int>(duration.count());

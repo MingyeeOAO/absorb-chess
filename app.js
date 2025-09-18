@@ -462,6 +462,10 @@ class ChessApp {
     offerDraw() {
         this.sendMessage({ type: 'offer_draw' });
     }
+
+    resign() {
+        this.sendMessage({ type: 'resign' });
+    }
     
     handleMessage(data) {
         console.log('Received message:', data);

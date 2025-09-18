@@ -487,12 +487,28 @@ class GameHandler:
                     'to': to_pos
                 }
                 
+                # Add promotion piece if the bot chose a promotion
+                if 'promotion_piece' in best_move:
+                    bot_move_data['promotion_piece'] = best_move['promotion_piece']
+                    print(f"[BOT] Making promotion move: {from_pos} -> {to_pos}, promoting to {best_move['promotion_piece']}")
+                
                 # Use handle_move but with bot's client ID
                 move_result = await self.handle_move(bot_player.id, None, lobby.game_state, bot_move_data)
                 
-                if move_result and isinstance(move_result, dict) and move_result.get('type') == 'move_made':
+                # Handle both single response and list response (for checkmate/stalemate)
+                move_made_response = None
+                if isinstance(move_result, list):
+                    # Find the move_made response in the list
+                    for response in move_result:
+                        if isinstance(response, dict) and response.get('type') == 'move_made':
+                            move_made_response = response
+                            break
+                elif isinstance(move_result, dict) and move_result.get('type') == 'move_made':
+                    move_made_response = move_result
+                
+                if move_made_response:
                     # Update lobby state
-                    self.state.update_lobby_game_state(lobby_code, move_result['game_state'])
+                    self.state.update_lobby_game_state(lobby_code, move_made_response['game_state'])
                     
                     # Send to all human players
                     for player in lobby.players:
@@ -501,7 +517,7 @@ class GameHandler:
                             pass
                             
                     print(f"[BOT] Move applied successfully: {from_pos} -> {to_pos}")
-                    return move_result
+                    return move_result  # Return the original result (could be list or dict)
                 else:
                     print(f"[BOT] Move failed: {move_result}")
             else:
@@ -526,15 +542,29 @@ class GameHandler:
                         'to': to_pos
                     }
                     
+                    # Note: Fallback engine doesn't support promotion selection,
+                    # it would just be handled as a regular move
+                    
                     # Use handle_move but with bot's client ID
                     move_result = await self.handle_move(bot_player.id, None, lobby.game_state, bot_move_data)
                     
-                    if move_result and isinstance(move_result, dict) and move_result.get('type') == 'move_made':
+                    # Handle both single response and list response (for checkmate/stalemate)
+                    move_made_response = None
+                    if isinstance(move_result, list):
+                        # Find the move_made response in the list
+                        for response in move_result:
+                            if isinstance(response, dict) and response.get('type') == 'move_made':
+                                move_made_response = response
+                                break
+                    elif isinstance(move_result, dict) and move_result.get('type') == 'move_made':
+                        move_made_response = move_result
+                    
+                    if move_made_response:
                         # Update lobby state
-                        self.state.update_lobby_game_state(lobby_code, move_result['game_state'])
+                        self.state.update_lobby_game_state(lobby_code, move_made_response['game_state'])
                         
                         print(f"[BOT] Fallback move applied successfully: {from_pos} -> {to_pos}")
-                        return move_result
+                        return move_result  # Return the original result (could be list or dict)
                     else:
                         print(f"[BOT] Fallback move failed: {move_result}")
                         

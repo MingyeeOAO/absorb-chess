@@ -88,11 +88,15 @@ class ChessEngineProcess:
             return False
     
     def _wait_for_response(self, timeout: float = 10.0) -> Optional[str]:
-        """Wait for response from engine"""
+        """Wait for response from engine. If timeout >= 40s, restart engine."""
         try:
             return self._response_queue.get(timeout=timeout)
         except queue.Empty:
-            logger.error("Timeout waiting for engine response")
+            logger.error(f"Timeout waiting for engine response (timeout={timeout}s)")
+            if timeout >= 40.0:
+                logger.error("Engine unresponsive for >= 40s, restarting engine process.")
+                self._cleanup()
+                self._start_process()
             return None
     
     def _format_board_command(self, board: List[List[int]], white_to_move: bool = True,
@@ -152,14 +156,22 @@ class ChessEngineProcess:
                         to_row, to_col = int(parts[3]), int(parts[4])
                         evaluation = int(parts[5])
                         time_taken = int(parts[6])
+                        flags = int(parts[7]) if len(parts) >= 8 else 0  # Handle promotion flags
                         
-                        return {
+                        result = {
                             'move': ((from_row, from_col), (to_row, to_col)),
                             'evaluation': evaluation,
                             'depth_reached': depth,
                             'nodes_searched': 0,
                             'time_taken_ms': time_taken
                         }
+                        
+                        # Add promotion information if this is a promotion move
+                        if flags >= 4 and flags <= 7:
+                            promotion_pieces = {4: 'Q', 5: 'R', 6: 'B', 7: 'N'}
+                            result['promotion_piece'] = promotion_pieces[flags]
+                        
+                        return result
                     except (ValueError, IndexError) as e:
                         logger.error(f"Failed to parse move response: {response}, error: {e}")
             elif response and response.startswith('ERROR'):
@@ -250,8 +262,8 @@ class SubprocessChessEngine:
             logger.error(f"Failed to initialize subprocess engine: {e}")
             raise
     
-    def find_best_move(self, chess_game, depth: int = 4, time_limit: int = 5) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
-        """Find best move - compatible with bot_engine.py interface"""
+    def find_best_move(self, chess_game, depth: int = 4, time_limit: int = 5) -> Optional[Dict[str, Any]]:
+        """Find best move - compatible with bot_engine.py interface, now returns full result with promotion data"""
         if not self.engine_process or not self.engine_process.is_ready():
             logger.warning("Engine process not ready")
             return None
@@ -325,8 +337,20 @@ class SubprocessChessEngine:
                 if move == ((0, 0), (0, 0)):
                     logger.warning("C++ engine returned invalid move (0,0) -> (0,0)")
                     return None
-                    
-                return move
+                
+                # Convert to dictionary format expected by bot_engine.py
+                from_pos, to_pos = move
+                move_dict = {
+                    'from': list(from_pos),
+                    'to': list(to_pos)
+                }
+                
+                # Add promotion piece if available
+                if 'promotion_piece' in result:
+                    move_dict['promotion_piece'] = result['promotion_piece']
+                    logger.info(f"C++ engine chose promotion: {result['promotion_piece']}")
+                
+                return move_dict
             else:
                 logger.warning("C++ engine returned no result")
                 return None

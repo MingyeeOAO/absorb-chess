@@ -50,9 +50,13 @@ class BotEngineManager:
                 if move:
                     evaluation = self.cpp_engine.get_evaluation()  # No game_state parameter needed
                     
-                    # Convert tuple format to dictionary format
-                    if isinstance(move, tuple) and len(move) == 2:
-                        # Handle tuple format: ((from_row, from_col), (to_row, to_col))
+                    # Handle new dictionary format from C++ engine
+                    if isinstance(move, dict) and 'from' in move and 'to' in move:
+                        # Already in correct format with potential promotion data
+                        logger.debug(f"[ENGINE] C++ move in dict format: {move}")
+                        return move, evaluation, "[ENGINE] C++ Engine"
+                    elif isinstance(move, tuple) and len(move) == 2:
+                        # Handle legacy tuple format: ((from_row, from_col), (to_row, to_col))
                         from_pos, to_pos = move
                         move_dict = {
                             'from': list(from_pos),
@@ -60,10 +64,6 @@ class BotEngineManager:
                         }
                         logger.debug(f"[ENGINE] Converted C++ move {move} to {move_dict}")
                         return move_dict, evaluation, "[ENGINE] C++ Engine"
-                    elif isinstance(move, dict) and 'from' in move and 'to' in move:
-                        # Already in correct format
-                        logger.debug(f"[ENGINE] C++ move already in dict format: {move}")
-                        return move, evaluation, "[ENGINE] C++ Engine"
                     else:
                         logger.warning(f"[ENGINE] Unexpected move format from C++: {move} (type: {type(move)})")
                         return move, evaluation, "[ENGINE] C++ Engine"

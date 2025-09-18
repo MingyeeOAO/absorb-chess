@@ -79,6 +79,7 @@ private:
     // Incremental evaluation cache
     mutable int cached_material_eval = 0;
     mutable int cached_king_safety_eval = 0;
+    mutable int cached_mobility_eval = 0;
     mutable bool eval_cache_valid = false;
 
     // Piece values for evaluation
@@ -120,6 +121,7 @@ private:
         // Incremental evaluation deltas
         int material_delta = 0;        // Material evaluation change
         int king_safety_delta = 0;     // King safety evaluation change
+        int mobility_delta = 0;        // Mobility evaluation change
         bool old_eval_cache_valid = false;  // Was eval cache valid before move?
     };
     struct MoveUndoBoard {
@@ -140,6 +142,7 @@ private:
     // Incremental evaluation helpers
     int calculate_material_delta(const Move& move) const;
     int calculate_king_safety_delta(const Move& move) const;
+    int calculate_mobility_delta(const Move& move) const;
     void invalidate_eval_cache() { eval_cache_valid = false; }
     void update_eval_cache() const;
     
