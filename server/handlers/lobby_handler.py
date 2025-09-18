@@ -343,7 +343,9 @@ class LobbyHandler:
         # Import here to avoid circular imports
         from server.handlers.game_handler import GameHandler
         game_handler = GameHandler()
-        move_result = await game_handler.handle_bot_move(lobby_code)
+        # Bot moves are now handled on frontend - remove this call
+        # move_result = await game_handler.handle_bot_move(lobby_code)
+        move_result = None  # No backend bot processing needed
         
         # If bot made a move, broadcast it to all players
         if move_result:

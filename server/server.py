@@ -245,20 +245,10 @@ class GameServer:
             await self.connection_manager.unregister_client(client_id, remove_from_lobby=False)
     
     async def _schedule_bot_move(self, lobby_code: str):
-        """Schedule a bot move after a short delay"""
-        print(f"[DEBUG] _schedule_bot_move called for lobby {lobby_code}")
-        await asyncio.sleep(1)  # 1 second delay for better UX
-        print(f"[DEBUG] About to call handle_bot_move for lobby {lobby_code}")
-        move_result = await self.game_handler.handle_bot_move(lobby_code)
-        #print(f"[DEBUG] handle_bot_move returned: {move_result}")
-        
-        # If bot made a move, broadcast it to all players
-        if move_result:
-            lobby = self.state.get_lobby(lobby_code)
-            if lobby:
-                for player in lobby.players:
-                    if hasattr(player, 'websocket') and player.websocket:  # Check for bot players
-                        await self.connection_manager.send_message(player.websocket, move_result)
+        """Schedule a bot move after a short delay - DISABLED (frontend bot)"""
+        print(f"[DEBUG] _schedule_bot_move called for lobby {lobby_code} - SKIPPED (frontend bot)")
+        # Bot moves are now handled entirely on the frontend
+        return None
     
     async def start(self):
         """Start the game server"""

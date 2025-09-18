@@ -87,7 +87,7 @@ private:
     
     void update_piece_lists();
     bool is_square_attacked(uint8_t row, uint8_t col, bool by_white) const;
-    bool is_in_check(bool white_king) const;
+    // Moved to public: bool is_in_check(bool white_king) const;
     bool can_castle_kingside(bool white) const;
     bool can_castle_queenside(bool white) const;
     
@@ -109,7 +109,7 @@ private:
     bool is_square_attacked_board_based(uint8_t row, uint8_t col, bool by_white) const;
     int count_pseudolegal_moves_for_color(bool white) const;
 
-    // Move application and undo
+    // Move application and undo - Moved to public section
     struct MoveUndo {
         uint32_t captured_piece;
         uint8_t captured_row, captured_col;
@@ -130,11 +130,10 @@ private:
         bool old_white_castled, old_black_castled;
         uint32_t moving_piece_before; // copy of moving piece
     };
-    MoveUndo apply_move(const Move& move);
-    void undo_move(const Move& move, const MoveUndo& undo_info);
+    // Moved to public: MoveUndo apply_move(const Move& move);
+    // Moved to public: void undo_move(const Move& move, const MoveUndo& undo_info);
     
-    // Evaluation
-    int evaluate_position() const;
+    // Evaluation - moved to public: int evaluate_position() const;
     int evaluate_material() const;
     int evaluate_mobility() const;
     int evaluate_king_safety() const;
@@ -161,7 +160,7 @@ private:
 public:
     ChessEngine();
     
-    // Interface with Python
+    // Interface with Python and WASM
     void set_board_state(const std::vector<std::vector<uint32_t>>& board, 
                         bool white_to_move, bool white_castled, bool black_castled,
                         int en_passant_col, int en_passant_row);
@@ -169,6 +168,12 @@ public:
     std::vector<Move> generate_legal_moves();
     Move find_best_move(int depth, int time_limit_ms);
     int get_evaluation();
+    
+    // Previously private, now public for WASM access
+    int evaluate_position() const;
+    bool is_in_check(bool white_king) const;
+    MoveUndo apply_move(const Move& move);
+    void undo_move(const Move& move, const MoveUndo& undo_info);
     
     // Utility functions
     std::vector<std::vector<uint32_t>> get_board_state() const;

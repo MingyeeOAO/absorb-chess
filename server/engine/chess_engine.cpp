@@ -617,6 +617,27 @@ ChessEngine::MoveUndo ChessEngine::apply_move(const Move& move) {
         moving_piece = promotion_type | abilities | color | HAS_MOVED;
     }
     
+    // Handle absorption: when capturing, gain the base type of the captured piece as an ability
+    uint32_t captured_piece = state.board[move.to_row][move.to_col];
+    if (captured_piece != 0) {
+        // Extract the base piece type from the captured piece (not its abilities)
+        uint32_t captured_base_type = captured_piece & (PIECE_PAWN | PIECE_KNIGHT | PIECE_BISHOP | PIECE_ROOK | PIECE_QUEEN | PIECE_KING);
+        
+        // Convert base piece type to corresponding ability
+        uint32_t gained_ability = 0;
+        if (captured_base_type == PIECE_PAWN) gained_ability = ABILITY_PAWN;
+        else if (captured_base_type == PIECE_KNIGHT) gained_ability = ABILITY_KNIGHT;
+        else if (captured_base_type == PIECE_BISHOP) gained_ability = ABILITY_BISHOP;
+        else if (captured_base_type == PIECE_ROOK) gained_ability = ABILITY_ROOK;
+        else if (captured_base_type == PIECE_QUEEN) gained_ability = ABILITY_QUEEN;
+        else if (captured_base_type == PIECE_KING) gained_ability = ABILITY_KING;
+        
+        // Add the gained ability to the moving piece
+        if (gained_ability != 0) {
+            moving_piece |= gained_ability;
+        }
+    }
+    
     // Move the piece
     state.board[move.to_row][move.to_col] = moving_piece | HAS_MOVED;
     state.board[move.from_row][move.from_col] = 0;
@@ -711,29 +732,37 @@ int ChessEngine::calculate_piece_ability_value(uint32_t piece) const {
     if (has_queen_ability) {
         // Queen already includes rook and bishop, so add queen value only
         if (!(type & PIECE_QUEEN)) {
-            total_value += 400; // Bonus for gaining queen ability
+            total_value += 900; // Bonus for gaining queen ability
+            if((abilities & ABILITY_ROOK)){
+                total_value -= 500; 
+            }
+            if((abilities & PIECE_BISHOP)){
+                total_value -= 330; 
+            }
         }
     } else {
         // Add individual abilities if no queen ability
-        if (has_rook_ability && !(type & PIECE_ROOK)) {
-            total_value += 250; // Half rook value for gaining rook ability
+        if (has_rook_ability && !(type & PIECE_ROOK) && !(abilities & ABILITY_QUEEN)) {
+            total_value += 500; // Half rook value for gaining rook ability
         }
-        if (has_bishop_ability && !(type & PIECE_BISHOP)) {
-            total_value += 165; // Half bishop value for gaining bishop ability
+        if (has_bishop_ability && !(type & PIECE_BISHOP) && !(abilities & ABILITY_QUEEN)) {
+            total_value += 330; // Half bishop value for gaining bishop ability
         }
     }
     
     // Other abilities
     if (abilities & ABILITY_KNIGHT && !(type & PIECE_KNIGHT)) {
-        total_value += 160; // Half knight value
+        total_value += 320; // Half knight value
     }
     if (abilities & ABILITY_PAWN && !(type & PIECE_PAWN)) {
-        total_value += 10; // Very low, only for en passant potential
-    }
-    if (abilities & ABILITY_KING && !(type & PIECE_KING)) {
-        total_value += 50; // King movement ability
-    }
+        if(abilities & (ABILITY_QUEEN) || (has_bishop_ability && has_rook_ability)){ 
+            total_value += 10; // Reduced value if already has major piece abilities
+        } else {
+            total_value += 100; // Full pawn ability value
+        }
     
+        
+    }
     return total_value;
 }
 
@@ -836,12 +865,35 @@ int ChessEngine::evaluate_mobility() const {
 int ChessEngine::evaluate_king_safety() const {
     int score = 0;
     
-    // Heavy penalty for being in check
+    // Penalty for being in check (reduced from 200 to 100)
     if (is_in_check(true)) {
-        score -= 200;  // Significant penalty for White king in check
+        score -= 100;  // Penalty for White king in check
     }
     if (is_in_check(false)) {
-        score += 200;  // Significant penalty for Black king in check (positive for White's perspective)
+        score += 100;  // Penalty for Black king in check (positive for White's perspective)
+    }
+    
+    // King ability bonus - kings with more abilities are safer (×5 multiplier)
+    for (const auto& piece : white_pieces) {
+        if (piece.get_type() & PIECE_KING) {
+            uint32_t king_piece = state.board[piece.row][piece.col];
+            int king_ability_value = calculate_piece_ability_value(king_piece);
+            int base_king_value = 100;  // Base king value without abilities
+            int ability_bonus = (king_ability_value - base_king_value) * 5;  // ×5 multiplier for safety
+            score += ability_bonus;
+            break;
+        }
+    }
+    
+    for (const auto& piece : black_pieces) {
+        if (piece.get_type() & PIECE_KING) {
+            uint32_t king_piece = state.board[piece.row][piece.col];
+            int king_ability_value = calculate_piece_ability_value(king_piece);
+            int base_king_value = 100;  // Base king value without abilities
+            int ability_bonus = (king_ability_value - base_king_value) * 5;  // ×5 multiplier for safety
+            score -= ability_bonus;  // Negative for black (positive for White's perspective)
+            break;
+        }
     }
     
     // Castling bonus
@@ -954,11 +1006,36 @@ int ChessEngine::calculate_king_safety_delta(const Move& move) const {
      * - If castling rights change -> adjust castling bonus
      * - If castling move -> add castling bonus
      * - If king moves -> may lose castling rights
+     * - If king gains abilities through absorption -> apply ability bonus (×5)
      * - Check status changes are handled in separate check penalty logic
      */
     int delta = 0;
     uint32_t moving_piece = state.board[move.from_row][move.from_col];
+    uint32_t captured_piece = state.board[move.to_row][move.to_col];
     bool is_white_move = (moving_piece & IS_WHITE) != 0;
+    
+    // King ability changes from absorption
+    if ((moving_piece & PIECE_KING) && captured_piece != 0) {
+        uint32_t victim_abilities = captured_piece & (ABILITY_PAWN | ABILITY_KNIGHT | ABILITY_BISHOP | ABILITY_ROOK | ABILITY_QUEEN | ABILITY_KING);
+        if (victim_abilities != 0) {
+            uint32_t old_king = moving_piece;
+            uint32_t new_king = moving_piece | victim_abilities;
+            
+            int old_ability_value = calculate_piece_ability_value(old_king);
+            int new_ability_value = calculate_piece_ability_value(new_king);
+            int base_king_value = 100;  // Base king value without abilities
+            
+            int old_safety_bonus = (old_ability_value - base_king_value) * 5;
+            int new_safety_bonus = (new_ability_value - base_king_value) * 5;
+            int safety_delta = new_safety_bonus - old_safety_bonus;
+            
+            if (is_white_move) {
+                delta += safety_delta;  // White king gains safety from abilities
+            } else {
+                delta -= safety_delta;  // Black king gains safety (negative for White's perspective)
+            }
+        }
+    }
     
     // Castling move bonuses
     if (move.flags == 2 || move.flags == 3) {  // Castling

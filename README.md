@@ -37,17 +37,29 @@ A web-based multiplayer chess game where pieces gain abilities by capturing othe
 
 ```
 absort chess/
-├── app.js
-├── engine.py
-├── index.html
+├── frontend/
+│   ├── app.js
+│   ├── index.html
+│   ├── styles.css
+│   ├── engine/
+│   │   ├── bot.js
+│   │   ├── engine.js
+│   │   ├── engine-worker.js
+│   │   └── chess_engine.wasm
+│   └── web_assets/
+│       ├── chess_engine.js
+│       └── pieces/
+├── server/
+│   ├── engine/
+│   │   ├── chess_engine.cpp
+│   │   └── build_wasm.bat
+│   ├── handlers/
+│   ├── core/
+│   └── server.py
 ├── main.py
 ├── README.md
 ├── requirements.txt
-├── resources/
-│   └── pieces/
-│       └── classic/
-├── server/
-│   ├── checkers/
+└── start_server.py
 │   │   └── timer_manager.py
 │   ├── core/
 │   │   ├── enums.py
@@ -80,7 +92,7 @@ absort chess/
 
 
 ### Frontend Setup
-1. Open `index.html` in a web browser
+1. Open `frontend/index.html` in a web browser
 2. The game will automatically connect to the server
 3. The frontend will automatically try servers listed in servers (line 103 of app.js). If localhost is unavailable, it will fall back to chess.harc.qzz.io (production server). Update the list if your backend runs on a different port.
 

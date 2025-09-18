@@ -8,7 +8,7 @@ from server.core.enums import Color, PieceType
 from server.core.state import GlobalState
 from server.core.models import BotPlayer
 from server.engine.engine import Engine
-from server.engine.bot_engine import get_bot_engine_manager
+# Removed: from server.engine.bot_engine import get_bot_engine_manager  # Now using frontend bot
 #from server.networking.connection import ConnectionManager
 
 class GameHandler:
@@ -441,134 +441,9 @@ class GameHandler:
         return None
     
     async def handle_bot_move(self, lobby_code: str):
-        """Handle bot move if it's the bot's turn"""
-        lobby = self.state.get_lobby(lobby_code)
-        if not lobby or not lobby.has_bot or not lobby.game_state:
-            return None
-            
-        # Check if it's bot's turn
-        current_turn = lobby.game_state.get('current_turn')
-        bot_player = None
-        for player in lobby.players:
-            if isinstance(player, BotPlayer) and player.color.value == current_turn:
-                bot_player = player
-                break
-                
-        if not bot_player:
-            return None
-            
-        print(f"[BOT] Bot's turn ({current_turn}), finding best move...")
-        
-        # Create game instance from state
-        game = ChessGame()
-        game.load_from_state(lobby.game_state)
-        
-        # Use new engine manager to find best move
-        import time
-        start_time = time.time()
-        
-        try:
-            bot_engine = get_bot_engine_manager()
-            print(f"[BOT] Using engine: {bot_engine.get_engine_status()}")
-            
-            best_move, evaluation, engine_info = bot_engine.find_best_move(game, depth=5, time_limit_ms=15000)
-            
-            end_time = time.time()
-            print(f"[BOT] {engine_info} - Best move: {best_move}, Evaluation: {evaluation}")
-            print(f"[BOT] Search completed in {end_time - start_time:.2f} seconds")
-            
-            if best_move:
-                from_pos = best_move['from']
-                to_pos = best_move['to']
-                
-                # Apply bot move using the same logic as human moves
-                bot_move_data = {
-                    'from': from_pos,
-                    'to': to_pos
-                }
-                
-                # Add promotion piece if the bot chose a promotion
-                if 'promotion_piece' in best_move:
-                    bot_move_data['promotion_piece'] = best_move['promotion_piece']
-                    print(f"[BOT] Making promotion move: {from_pos} -> {to_pos}, promoting to {best_move['promotion_piece']}")
-                
-                # Use handle_move but with bot's client ID
-                move_result = await self.handle_move(bot_player.id, None, lobby.game_state, bot_move_data)
-                
-                # Handle both single response and list response (for checkmate/stalemate)
-                move_made_response = None
-                if isinstance(move_result, list):
-                    # Find the move_made response in the list
-                    for response in move_result:
-                        if isinstance(response, dict) and response.get('type') == 'move_made':
-                            move_made_response = response
-                            break
-                elif isinstance(move_result, dict) and move_result.get('type') == 'move_made':
-                    move_made_response = move_result
-                
-                if move_made_response:
-                    # Update lobby state
-                    self.state.update_lobby_game_state(lobby_code, move_made_response['game_state'])
-                    
-                    # Send to all human players
-                    for player in lobby.players:
-                        if not isinstance(player, BotPlayer) and hasattr(player, 'websocket') and player.websocket:
-                            # Note: Move result will be sent by the server's message handler
-                            pass
-                            
-                    print(f"[BOT] Move applied successfully: {from_pos} -> {to_pos}")
-                    return move_result  # Return the original result (could be list or dict)
-                else:
-                    print(f"[BOT] Move failed: {move_result}")
-            else:
-                print("[BOT] No valid move found")
-                
-        except Exception as e:
-            print(f"[BOT] Error finding move: {e}")
-            # Fallback to original engine on error
-            try:
-                print("[BOT] Attempting fallback to original engine...")
-                engine = Engine(game)
-                best_move, evaluation, depth = engine.find_best_move_with_time_limit(4, 15)
-                end_time = time.time()
-                print(f"[BOT] Fallback engine - Best move: {best_move}, Evaluation: {evaluation}, Depth: {depth}")
-                print(f"[BOT] Fallback search completed in {end_time - start_time:.2f} seconds")
-                
-                if best_move:
-                    from_pos, to_pos = best_move
-                    # Apply bot move using the same logic as human moves
-                    bot_move_data = {
-                        'from': from_pos,
-                        'to': to_pos
-                    }
-                    
-                    # Note: Fallback engine doesn't support promotion selection,
-                    # it would just be handled as a regular move
-                    
-                    # Use handle_move but with bot's client ID
-                    move_result = await self.handle_move(bot_player.id, None, lobby.game_state, bot_move_data)
-                    
-                    # Handle both single response and list response (for checkmate/stalemate)
-                    move_made_response = None
-                    if isinstance(move_result, list):
-                        # Find the move_made response in the list
-                        for response in move_result:
-                            if isinstance(response, dict) and response.get('type') == 'move_made':
-                                move_made_response = response
-                                break
-                    elif isinstance(move_result, dict) and move_result.get('type') == 'move_made':
-                        move_made_response = move_result
-                    
-                    if move_made_response:
-                        # Update lobby state
-                        self.state.update_lobby_game_state(lobby_code, move_made_response['game_state'])
-                        
-                        print(f"[BOT] Fallback move applied successfully: {from_pos} -> {to_pos}")
-                        return move_result  # Return the original result (could be list or dict)
-                    else:
-                        print(f"[BOT] Fallback move failed: {move_result}")
-                        
-            except Exception as fallback_error:
-                print(f"[BOT] Fallback engine also failed: {fallback_error}")
-            
+        """
+        DEPRECATED: Bot move handling moved to frontend
+        Bot games are now handled entirely on the client side using WebAssembly engine
+        """
+        print("[BOT] Backend bot handling disabled - using frontend bot instead")
         return None

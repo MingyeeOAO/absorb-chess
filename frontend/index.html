@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chess with Piece Abilities</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Main Menu -->
+        <div id="main-menu" class="screen active">
+            <div class="container">
+                <h1>Chess with Piece Abilities</h1>
+                <p>When pieces capture others, they gain their movement abilities!</p>
+                
+                <div class="menu-buttons">
+                    <button id="create-lobby-btn" class="btn btn-primary">Create Lobby</button>
+                    <button id="join-lobby-btn" class="btn btn-secondary">Join Lobby</button>
+                    <button id="play-bot-btn" class="btn btn-primary">Play a Bot</button>
+                    <button id="search-game-btn" class="btn btn-primary">Quick Match (10+0)</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Create Lobby Screen -->
+        <div id="create-lobby" class="screen">
+            <div class="container">
+                <h2>Create New Lobby</h2>
+                <form id="create-lobby-form">
+                    <div class="form-group">
+                        <label for="player-name-create">Your Name:</label>
+                        <input type="text" id="player-name-create" required placeholder="Enter your name">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Game Settings:</label>
+                        <div class="settings-grid">
+                            <div class="setting-item">
+                                <label for="time-minutes">Time (minutes):</label>
+                                <input type="number" id="time-minutes" min="0" max="180" value="10" />
+                            </div>
+                            <div class="setting-item">
+                                <label for="time-increment">Increment (seconds):</label>
+                                <input type="number" id="time-increment" min="0" max="60" value="0" />
+                            </div>
+
+                        </div>
+                    </div>
+                    
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Create Lobby</button>
+                        <button type="button" id="back-to-menu" class="btn btn-secondary">Back</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Search Game Screen -->
+        <div id="search-game" class="screen">
+            <div class="container">
+                <h2>Quick Match (10+0)</h2>
+                <form id="search-game-form">
+                    <div class="form-group">
+                        <label for="player-name-search">Your Name:</label>
+                        <input type="text" id="player-name-search" required placeholder="Enter your name">
+                    </div>
+                    
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Search Game</button>
+                        <button type="button" id="cancel-search" class="btn btn-secondary">Cancel</button>
+                    </div>
+                </form>
+                
+                <div id="searching-status" style="display: none;">
+                    <p>Searching for opponent...</p>
+                    <div class="loading-spinner"></div>
+                    <button type="button" id="cancel-searching" class="btn btn-secondary">Cancel Search</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Join Lobby Screen -->
+        <div id="join-lobby" class="screen">
+            <div class="container">
+                <h2>Join Lobby</h2>
+                <form id="join-lobby-form">
+                    <div class="form-group">
+                        <label for="lobby-code">Lobby Code:</label>
+                        <input type="text" id="lobby-code" required placeholder="Enter 6-character code" maxlength="6">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="player-name-join">Your Name:</label>
+                        <input type="text" id="player-name-join" required placeholder="Enter your name">
+                    </div>
+                    
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Join Lobby</button>
+                        <button type="button" id="back-to-menu-join" class="btn btn-secondary">Back</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Lobby Waiting Screen -->
+        <div id="lobby-waiting" class="screen">
+            <div class="container">
+                <h2>Lobby: <span id="lobby-code-display"></span></h2>
+                
+                <div class="lobby-info">
+                    <div class="players-section">
+                        <h3>Players:</h3>
+                        <div id="players-list"></div>
+                    </div>
+                    
+                    <div class="settings-section">
+                        <h3>Game Settings:</h3>
+                        <div id="lobby-settings"></div>
+                    </div>
+                </div>
+                
+                <div id="owner-controls" class="owner-controls" style="display: none;">
+                    <div class="color-controls">
+                        <button id="swap-colors-btn" class="btn btn-secondary">Swap Colors</button>
+                        <button id="random-colors-btn" class="btn btn-secondary">Random Colors</button>
+                    </div>
+                    <button id="start-game-btn" class="btn btn-primary" disabled>Start Game</button>
+                </div>
+                
+                <div class="waiting-message">
+                    <p id="waiting-text">Waiting for players...</p>
+                </div>
+                
+                <button id="leave-lobby-btn" class="btn btn-secondary">Leave Lobby</button>
+            </div>
+        </div>
+
+        <!-- Game Screen -->
+        <div id="game-screen" class="screen">
+            <div class="game-container">
+                <div class="game-header">
+                    <div class="player-info">
+                        <div class="current-player">
+                            <span>Current Turn: </span>
+                            <span id="current-turn">White</span>
+                        </div>
+                        <div class="connection-status">
+                            <span id="connection-status">Connected</span>
+                        </div>
+                    </div>
+                    <div class="game-actions">
+                        <button id="offer-draw-btn" class="btn btn-secondary">Offer Draw</button>
+                        <button id="resign-btn" class="btn btn-secondary">Resign</button>
+                        <button id="leave-game-btn" class="btn btn-secondary">Leave Game</button>
+                    </div>
+                </div>
+                
+                <div class="game-board-container">
+                    <div class="clocks-container">
+                        <div class="clocks"></div>
+                    </div>
+                    <div id="chess-board" class="chess-board"></div>
+                </div>
+                
+                <div class="game-sidebar">
+                    <div class="move-history">
+                        <h3>Move History</h3>
+                        <div id="move-list"></div>
+                    </div>
+                    
+                    <div class="piece-abilities">
+                        <h3>Selected Piece Abilities</h3>
+                        <div id="abilities-display"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error Modal -->
+        <div id="error-modal" class="modal">
+            <div class="modal-content">
+                <h3>Error</h3>
+                <p id="error-message"></p>
+                <button id="close-error" class="btn btn-primary">OK</button>
+            </div>
+        </div>
+
+        <!-- Connection Warning -->
+        <div id="connection-warning" class="connection-warning hidden">
+            <div class="warning-content">
+                <span class="warning-text"></span>
+                <div class="countdown"></div>
+            </div>
+        </div>
+    </div>
+    <!-- Load WASM engine (when available) -->
+    <script src="engine/chess_engine.js"></script>
+    <!-- Load engine interface -->
+    <script src="engine/engine.js"></script>
+    <!-- Load bot controller -->
+    <script src="engine/bot.js"></script>
+    <!-- Load main app -->
+    <script src="app.js?16"></script>
+</body>
+</html>
