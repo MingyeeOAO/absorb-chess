@@ -146,6 +146,11 @@ class ChessBot {
             );
 
             console.log('📥 [BOT] Received from engine:', move);
+            
+            // Log evaluation prominently
+            if (move && move.evaluation !== undefined) {
+                console.log('🎯 BOT MOVE EVALUATION:', move.evaluation);
+            }
 
             if (!move) {
                 console.error('❌ Bot could not find a move');

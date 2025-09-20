@@ -1139,6 +1139,63 @@ class ChessApp {
         if (modal) modal.remove();
     }
     
+    /**
+     * Show promotion modal for bot games
+     */
+    showPromotionModalForMove(move) {
+        this.clearPromotionModal();
+        const modal = document.createElement('div');
+        modal.id = 'promotion-modal';
+        modal.className = 'modal active';
+        modal.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>Choose Promotion</h3>
+                </div>
+                <div class="promotion-choices">
+                    <button class="btn btn-primary" data-choice="queen">Queen</button>
+                    <button class="btn btn-primary" data-choice="rook">Rook</button>
+                    <button class="btn btn-primary" data-choice="bishop">Bishop</button>
+                    <button class="btn btn-primary" data-choice="knight">Knight</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(modal);
+        
+        // Handle promotion choice for bot games
+        modal.querySelectorAll('button[data-choice]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const choice = btn.getAttribute('data-choice');
+                console.log('🎯 [PROMOTION] User chose:', choice);
+                
+                // Convert choice to flag
+                const promotionFlags = {
+                    'queen': 4,
+                    'rook': 5,
+                    'bishop': 6,
+                    'knight': 7
+                };
+                
+                // Update the move with the chosen promotion
+                const promotionMove = {
+                    ...move,
+                    flags: promotionFlags[choice]
+                };
+                
+                this.clearPromotionModal();
+                
+                // Apply the promotion move
+                const success = await this.applyLocalMove(promotionMove);
+                if (success && this.bot) {
+                    // Notify bot of player move
+                    await this.bot.onPlayerMove(promotionMove);
+                    // After player move, trigger bot move
+                    this.handleNextTurn();
+                }
+            });
+        });
+    }
+    
     handleGameOver(reason) {
         const winner = this.gameState.winner;
         let winnerText;
@@ -1303,6 +1360,19 @@ class ChessApp {
         this.selectedSquare = null;
         this.possibleMoves = [];
         this.clearSelection();
+        
+        // Reset bot game state
+        this.isBotGame = false;
+        this.isCreatingBotGame = false;
+        if (this.bot) {
+            this.bot.stopGame();
+            this.bot = null;
+        }
+        
+        // Re-enable board interactions (in case they were disabled)
+        document.querySelectorAll('.chess-square').forEach(square => {
+            square.style.pointerEvents = 'auto';
+        });
     }
     
     updateCurrentTurn() {
@@ -1759,21 +1829,98 @@ class ChessApp {
      */
     async handleBotGameMove(from, to) {
         try {
-            const move = {
-                from: [from.row, from.col],
-                to: [to.row, to.col]
-            };
+            console.log('🎮 Handling bot game move:', from, to);
             
-            console.log('🎮 Handling bot game move:', move);
+            // Get the complete move with flags from engine
+            const moveResult = await this.bot.engine.getMoveWithFlags(
+                this.gameState.board, 
+                this.gameState,
+                [from.row, from.col],
+                [to.row, to.col]
+            );
+            
+            if (!moveResult) {
+                console.error('❌ Invalid move - not found in legal moves');
+                return;
+            }
+            
+            console.log('🎯 Move result from engine:', moveResult);
+            
+            // Handle multiple moves (promotion options)
+            if (Array.isArray(moveResult)) {
+                console.log('🎯 Multiple moves found:', moveResult);
+                
+                // Check if these are actually promotion moves (flags 4-7)
+                const hasPromotionMoves = moveResult.some(move => move.flags >= 4 && move.flags <= 7);
+                
+                if (hasPromotionMoves) {
+                    // Verify this is a pawn reaching promotion rank
+                    const firstMove = moveResult[0];
+                    const piece = this.gameState.board[firstMove.from[0]][firstMove.from[1]];
+                    const isActualPawnPromotion = (piece && piece.type === 'pawn' && 
+                        ((piece.color === 'white' && firstMove.to[0] === 0) || 
+                         (piece.color === 'black' && firstMove.to[0] === 7)));
+                    
+                    if (isActualPawnPromotion) {
+                        console.log('🎯 Confirmed multiple promotion options found');
+                        this.showPromotionModalForMove(firstMove);
+                        return;
+                    } else {
+                        console.warn('⚠️ Multiple moves with promotion flags but not a pawn promotion');
+                    }
+                }
+                
+                // If not promotion moves, just use the first move
+                console.log('🔧 Multiple non-promotion moves, using first move');
+                const moveToUse = moveResult[0];
+                moveToUse.flags = 0; // Ensure flags are clean
+                
+                // Apply move locally using engine
+                const success = await this.applyLocalMove(moveToUse);
+                console.log('🔍 [TURN] After applyLocalMove, current_turn:', this.gameState.current_turn);
+                
+                if (success && this.bot) {
+                    // Notify bot of player move
+                    console.log('🔍 [TURN] Before bot.onPlayerMove, current_turn:', this.gameState.current_turn);
+                    await this.bot.onPlayerMove(moveToUse);
+                    console.log('🔍 [TURN] After bot.onPlayerMove, current_turn:', this.gameState.current_turn);
+                    
+                    // After player move, trigger bot move
+                    this.handleNextTurn();
+                }
+                return;
+            }
+            
+            // Single move - check if it's a promotion that needs user input
+            const completeMove = moveResult;
+            
+            // More robust promotion check: must have promotion flags AND be an actual pawn promotion
+            const hasPromotionFlags = completeMove.flags >= 4 && completeMove.flags <= 7;
+            if (hasPromotionFlags) {
+                const piece = this.gameState.board[completeMove.from[0]][completeMove.from[1]];
+                const isActualPawnPromotion = (piece && piece.type === 'pawn' && 
+                    ((piece.color === 'white' && completeMove.to[0] === 0) || 
+                     (piece.color === 'black' && completeMove.to[0] === 7)));
+                
+                if (isActualPawnPromotion) {
+                    console.log('🎯 [PROMOTION] Confirmed pawn promotion detected');
+                    this.showPromotionModalForMove(completeMove);
+                    return;
+                } else {
+                    console.warn('⚠️ [PROMOTION] Move has promotion flags but is not a pawn promotion. Ignoring flags. Piece:', piece?.type, 'Flags:', completeMove.flags);
+                    // Clear the invalid flags to prevent issues downstream
+                    completeMove.flags = 0;
+                }
+            }
             
             // Apply move locally using engine
-            const success = await this.applyLocalMove(move);
+            const success = await this.applyLocalMove(completeMove);
             console.log('🔍 [TURN] After applyLocalMove, current_turn:', this.gameState.current_turn);
             
             if (success && this.bot) {
                 // Notify bot of player move
                 console.log('🔍 [TURN] Before bot.onPlayerMove, current_turn:', this.gameState.current_turn);
-                await this.bot.onPlayerMove(move);
+                await this.bot.onPlayerMove(completeMove);
                 console.log('🔍 [TURN] After bot.onPlayerMove, current_turn:', this.gameState.current_turn);
                 
                 // After player move, trigger bot move
@@ -1821,25 +1968,25 @@ class ChessApp {
      * Handle next turn in bot game
      */
     handleNextTurn() {
-        console.log('🔄 [TURN HANDLER] handleNextTurn called - current_turn:', this.gameState.current_turn);
-        console.log('🔄 [TURN HANDLER] isBotGame:', this.isBotGame, 'game_over:', this.gameState.game_over);
-        console.log('🔄 [TURN HANDLER] playerColor:', this.playerColor);
+        //console.log('🔄 [TURN HANDLER] handleNextTurn called - current_turn:', this.gameState.current_turn);
+        //console.log('🔄 [TURN HANDLER] isBotGame:', this.isBotGame, 'game_over:', this.gameState.game_over);
+        //console.log('🔄 [TURN HANDLER] playerColor:', this.playerColor);
         
         if (this.isBotGame && !this.gameState.game_over) {
             const isPlayerTurn = this.gameState.current_turn === this.playerColor;
-            console.log('🔄 [TURN HANDLER] isPlayerTurn:', isPlayerTurn);
+            //console.log('🔄 [TURN HANDLER] isPlayerTurn:', isPlayerTurn);
             
             if (!isPlayerTurn) {
                 // Bot's turn
-                console.log('🤖 [TURN HANDLER] It\'s the bot\'s turn, scheduling bot move...');
+                //console.log('🤖 [TURN HANDLER] It\'s the bot\'s turn, scheduling bot move...');
                 setTimeout(() => {
                     this.makeBotMove();
                 }, 1000); // Add small delay for better UX
             } else {
-                console.log('👤 [TURN HANDLER] It\'s the player\'s turn');
+                //console.log('👤 [TURN HANDLER] It\'s the player\'s turn');
             }
         } else {
-            console.log('❌ [TURN HANDLER] Not triggering bot move - isBotGame:', this.isBotGame, 'game_over:', this.gameState.game_over);
+            //console.log('❌ [TURN HANDLER] Not triggering bot move - isBotGame:', this.isBotGame, 'game_over:', this.gameState.game_over);
         }
     }
     
@@ -1855,11 +2002,11 @@ class ChessApp {
             // Check if it's actually the bot's turn
             const isPlayerTurn = this.gameState.current_turn === this.playerColor;
             if (isPlayerTurn) {
-                console.log('🚫 [APP] Not bot turn, returning');
+                // console.log('🚫 [APP] Not bot turn, returning');
                 return;
             }
             
-            console.log('🤖 Bot is thinking...');
+            //console.log('🤖 Bot is thinking...');
             
             // Let the bot make its own move (it handles the move application internally)
             await this.bot.makeBotMove();
@@ -1884,9 +2031,9 @@ class ChessApp {
 
             if (moveResult.success) {
                 // Update game state
-                console.log('🔄 [TURN] Before turn switch - current_turn:', this.gameState.current_turn);
+                //console.log('🔄 [TURN] Before turn switch - current_turn:', this.gameState.current_turn);
                 this.gameState.current_turn = this.gameState.current_turn === 'white' ? 'black' : 'white';
-                console.log('🔄 [TURN] After turn switch - current_turn:', this.gameState.current_turn);
+                //console.log('🔄 [TURN] After turn switch - current_turn:', this.gameState.current_turn);
                 
                 // Update move history
                 this.addMoveToHistory(move);
@@ -1896,7 +2043,7 @@ class ChessApp {
                 
                 // Show absorption feedback
                 if (moveResult.capturedPiece) {
-                    console.log('🎉 [ABSORPTION] Piece absorbed with abilities:', moveResult.capturedPiece.abilities);
+                   // console.log('🎉 [ABSORPTION] Piece absorbed with abilities:', moveResult.capturedPiece.abilities);
                 }
                 
                 // Redraw board
@@ -1910,19 +2057,19 @@ class ChessApp {
                 this.renderChessBoard();
                 
                 // Check for game end conditions
-                console.log('🔄 [MOVE] About to check game end conditions...');
+                //console.log('🔄 [MOVE] About to check game end conditions...');
                 await this.checkGameEndConditions();
-                console.log('🔄 [TURN] After checkGameEndConditions - current_turn:', this.gameState.current_turn);
+                // console.log('🔄 [TURN] After checkGameEndConditions - current_turn:', this.gameState.current_turn);
                 
                 // If game is not over, handle next turn
                 if (!this.gameState.game_over && !this.gameState.gameOver) {
-                    console.log('🔄 [MOVE] Game continues, calling handleNextTurn...');
+                    //console.log('🔄 [MOVE] Game continues, calling handleNextTurn...');
                     await this.handleNextTurn();
                 } else {
-                    console.log('🏁 [MOVE] Game is over, not calling handleNextTurn');
+                    //console.log('🏁 [MOVE] Game is over, not calling handleNextTurn');
                 }
                 
-                console.log('✅ Move applied successfully');
+                //console.log('✅ Move applied successfully');
                 return true;
             } else {
                 console.log('❌ Failed to apply move');
@@ -1966,7 +2113,7 @@ class ChessApp {
                 return;
             }
 
-            console.log('🔍 [GAME END] Checking game end conditions for', this.gameState.current_turn);
+            //console.log('🔍 [GAME END] Checking game end conditions for', this.gameState.current_turn);
 
             // Get legal moves for current player
             let legalMoves;
@@ -1975,7 +2122,7 @@ class ChessApp {
                     this.gameState.board, 
                     this.gameState
                 );
-                console.log('🔍 [GAME END] Legal moves retrieved successfully:', Object.keys(legalMoves).length, 'pieces with moves');
+                //console.log('🔍 [GAME END] Legal moves retrieved successfully:', Object.keys(legalMoves).length, 'pieces with moves');
             } catch (error) {
                 console.error('❌ [GAME END] Failed to get legal moves:', error);
                 console.log('🔄 [GAME END] Skipping game end check due to engine error');
@@ -2013,7 +2160,7 @@ class ChessApp {
                     this.handleBotGameOver('stalemate');
                 }
             } else {
-                console.log('✅ [GAME END] Game continues - found legal moves');
+                //console.log('✅ [GAME END] Game continues - found legal moves');
                 // Note: Do NOT call handleNextTurn here as it's already handled by the move application flow
             }
         } catch (error) {
@@ -2052,15 +2199,15 @@ class ChessApp {
      * Update valid moves for current position (bot games)
      */
     async updateBotGameValidMoves() {
-        console.log('🔍 [DEBUG] updateBotGameValidMoves called with:', {
-            isBotGame: this.isBotGame,
-            botExists: !!this.bot,
-            engineExists: !!this.bot?.engine,
-            engineInitialized: this.bot?.engine?.isInitialized
-        });
+        // console.log('🔍 [DEBUG] updateBotGameValidMoves called with:', {
+        //     isBotGame: this.isBotGame,
+        //     botExists: !!this.bot,
+        //     engineExists: !!this.bot?.engine,
+        //     engineInitialized: this.bot?.engine?.isInitialized
+        // });
 
         if (!this.isBotGame) {
-            console.log('❌ [DEBUG] Not a bot game, returning');
+            // console.log('❌ [DEBUG] Not a bot game, returning');
             return;
         }
 
@@ -2075,13 +2222,13 @@ class ChessApp {
         }
 
         try {
-            console.log('📤 [DEBUG] Calling engine.getLegalMoves...');
+            // console.log('📤 [DEBUG] Calling engine.getLegalMoves...');
             const legalMoves = await this.bot.engine.getLegalMoves(
                 this.gameState.board, 
                 this.gameState
             );
 
-            console.log('🔍 [DEBUG] Legal moves from engine:', legalMoves);
+            // console.log('🔍 [DEBUG] Legal moves from engine:', legalMoves);
 
             // Convert to the format expected by the UI
             this.allValidMoves = new Map();
@@ -2093,7 +2240,7 @@ class ChessApp {
                 })));
             }
 
-            console.log('🔍 Updated valid moves for bot game:', this.allValidMoves);
+            // console.log('🔍 Updated valid moves for bot game:', this.allValidMoves);
         } catch (error) {
             console.error('Error updating bot game valid moves:', error);
         }

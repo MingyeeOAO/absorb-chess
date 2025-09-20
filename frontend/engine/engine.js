@@ -48,6 +48,7 @@ class ChessEngine {
      * Handle messages from the worker
      */
     _handleWorkerMessage(message) {
+        // console.log('ENGINE WORKER -> MAIN:', message);
         const { type, id, data, error } = message;
         
         if (type === 'initialized') {
@@ -78,6 +79,7 @@ class ChessEngine {
      * Send a message to the worker
      */
     _sendMessage(type, data = null) {
+        // console.log('ENGINE MAIN -> WORKER:', { type, data });
         return new Promise((resolve, reject) => {
             const id = type === 'initialize' ? 'init' : ++this.requestId;
             
@@ -103,14 +105,18 @@ class ChessEngine {
             await this.initialize();
         }
 
-        console.log('🤖 [ENGINE] Requesting best move from worker...');
+        // console.log('🤖 [ENGINE] Requesting best move from worker...');
         
         try {
             const move = await this._sendMessage('findBestMove', {
                 board, gameState, depth, timeLimit
             });
             
-            console.log('✅ [ENGINE] Received best move from worker:', move);
+            console.log('🎯 ENGINE BEST MOVE & EVAL:', {
+                move: move ? `${move.from} -> ${move.to}` : null,
+                evaluation: move ? move.evaluation : null,
+                flags: move ? move.flags : null
+            });
             return move;
         } catch (error) {
             console.error('❌ [ENGINE] Error finding best move:', error);
@@ -126,14 +132,14 @@ class ChessEngine {
             await this.initialize();
         }
 
-        console.log('📋 [ENGINE] Requesting legal moves from worker...');
+        // console.log('📋 [ENGINE] Requesting legal moves from worker...');
         
         try {
             const moves = await this._sendMessage('getLegalMoves', {
                 board, gameState
             });
             
-            console.log('✅ [ENGINE] Received legal moves from worker');
+            // console.log('✅ [ENGINE] Received legal moves from worker');
             return moves;
         } catch (error) {
             console.error('❌ [ENGINE] Error getting legal moves:', error);
@@ -165,6 +171,29 @@ class ChessEngine {
     }
 
     /**
+     * Get complete move with flags for a specific from/to position
+     */
+    async getMoveWithFlags(board, gameState, from, to) {
+        if (!this.isInitialized) {
+            await this.initialize();
+        }
+
+        console.log('🎯 [ENGINE] Getting move with flags from worker...');
+        
+        try {
+            const move = await this._sendMessage('getMoveWithFlags', {
+                board, gameState, from, to
+            });
+            
+            console.log('✅ [ENGINE] Received move with flags:', move);
+            return move;
+        } catch (error) {
+            console.error('❌ [ENGINE] Error getting move with flags:', error);
+            return null;
+        }
+    }
+
+    /**
      * Terminate the worker
      */
     terminate() {
@@ -189,7 +218,7 @@ class ChessEngine {
 function applyMoveToBoard(board, move) {
     console.log('🎯 [MOVE] Applying move manually:', move);
     
-    const { from, to } = move;
+    const { from, to, flags } = move;
     const fromPiece = board[from[0]][from[1]];
     const toPiece = board[to[0]][to[1]];
     
@@ -200,15 +229,75 @@ function applyMoveToBoard(board, move) {
     
     // Create a deep copy of the piece to avoid modifying the original
     const movingPiece = JSON.parse(JSON.stringify(fromPiece));
-    movingPiece.hasMoved = true;
+    movingPiece.has_moved = true; // Use consistent property name
     
-    // Handle absorption if there's a capture
+    // Handle special moves based on flags
     let capturedPiece = null;
-    if (toPiece && toPiece.color !== movingPiece.color) {
-        capturedPiece = toPiece;
+    
+    if (flags === 1) {
+        // En passant capture
+        console.log('🎯 [SPECIAL] En passant capture');
+        // The captured pawn is not at the destination square, but adjacent to it
+        const capturedRow = from[0]; // Same row as attacking pawn
+        const capturedCol = to[1];   // Same column as destination
+        capturedPiece = board[capturedRow][capturedCol];
+        board[capturedRow][capturedCol] = null; // Remove the captured pawn
+        console.log('💥 [EN PASSANT] Captured pawn at:', capturedRow, capturedCol);
+    } else if (flags === 2) {
+        // Kingside castling
+        console.log('🎯 [SPECIAL] Kingside castling');
+        const rookFromCol = 7;
+        const rookToCol = 5;
+        const rook = board[from[0]][rookFromCol];
+        if (rook) {
+            // Move the rook
+            board[from[0]][rookFromCol] = null;
+            const rookCopy = JSON.parse(JSON.stringify(rook));
+            rookCopy.has_moved = true;
+            board[from[0]][rookToCol] = rookCopy;
+            console.log('🏰 [CASTLING] Moved rook from', rookFromCol, 'to', rookToCol);
+        }
+    } else if (flags === 3) {
+        // Queenside castling  
+        console.log('🎯 [SPECIAL] Queenside castling');
+        const rookFromCol = 0;
+        const rookToCol = 3;
+        const rook = board[from[0]][rookFromCol];
+        if (rook) {
+            // Move the rook
+            board[from[0]][rookFromCol] = null;
+            const rookCopy = JSON.parse(JSON.stringify(rook));
+            rookCopy.has_moved = true;
+            board[from[0]][rookToCol] = rookCopy;
+            console.log('🏰 [CASTLING] Moved rook from', rookFromCol, 'to', rookToCol);
+        }
+    } else if (flags >= 4 && flags <= 7) {
+        // Promotion
+        const promotionPieces = {
+            4: 'queen',
+            5: 'rook',
+            6: 'bishop', 
+            7: 'knight'
+        };
+        movingPiece.type = promotionPieces[flags];
+        movingPiece.abilities = movingPiece.abilities.filter(ability => ability !== 'pawn');
+        movingPiece.abilities.push(movingPiece.type); // Ensure promoted piece has its own ability
+        console.log('🎯 [PROMOTION] Pawn promoted to:', movingPiece.type);
+    } else {
+        // Regular capture (if any)
+        if (toPiece && toPiece.color !== movingPiece.color) {
+            capturedPiece = toPiece;
+        }
+    }
+    
+    // Handle absorption if there's a capture (except for en passant which was handled above)
+    if (capturedPiece && capturedPiece.color !== movingPiece.color) {
         console.log('💥 [ABSORPTION] Capturing piece:', capturedPiece.type, 'with abilities:', capturedPiece.abilities);
         
         // ONLY add captured piece's BASE TYPE to abilities (not its inherited abilities)
+        if (!movingPiece.abilities) {
+            movingPiece.abilities = [movingPiece.type];
+        }
         if (!movingPiece.abilities.includes(capturedPiece.type)) {
             movingPiece.abilities.push(capturedPiece.type);
             console.log('✨ [ABSORPTION] Gained ability:', capturedPiece.type, 'New abilities:', movingPiece.abilities);

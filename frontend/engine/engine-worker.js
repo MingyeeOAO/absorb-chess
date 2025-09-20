@@ -1,5 +1,7 @@
 // Import the WASM engine
-importScripts('./chess_engine.js');
+importScripts('./chess_engine_v2.js');
+
+// console.log('🔧🔧🔧 ENGINE WORKER SCRIPT LOADED 🔧🔧🔧');
 
 let engine = null;
 let isInitialized = false;
@@ -7,14 +9,14 @@ let isInitialized = false;
 // Initialize the engine
 async function initializeEngine() {
     try {
-        console.log('🔧 [WORKER] Initializing chess engine...');
+        // console.log('🚀🚀 ENGINE WORKER INIT: Starting chess engine initialization 🚀🚀🚀');
         
-        if (typeof ChessEngineModule === 'undefined') {
-            throw new Error('ChessEngineModule not available in worker');
+        if (typeof ChessEngineV2Module === 'undefined') {
+            throw new Error('ChessEngineV2Module not available in worker');
         }
         
         // Configure WASM module with correct paths
-        const wasmModule = await ChessEngineModule({
+        const wasmModule = await ChessEngineV2Module({
             locateFile: function(path) {
                 if (path.endsWith('.wasm')) {
                     return './' + path;  // WASM file is in the same directory as the worker
@@ -25,7 +27,8 @@ async function initializeEngine() {
         engine = new wasmModule.WasmChessEngine();
         
         isInitialized = true;
-        console.log('✅ [WORKER] Chess engine initialized successfully');
+        // console.log('✅ [WORKER] Chess engine initialized successfully');
+        // console.log('ENGINE INIT: Chess engine ready');
         postMessage({ type: 'initialized', success: true });
     } catch (error) {
         console.error('❌ [WORKER] Engine initialization failed:', error);
@@ -85,16 +88,16 @@ function convertBoardToEngine(board) {
             if (piece.hasMoved) value |= 4096; // HAS_MOVED = 4096
 
             // Debug log for all pieces to understand conversion
-            console.log(`🔍 [WORKER] Converting piece at [${row},${col}]:`, {
-                type: piece.type,
-                abilities: piece.abilities,
-                color: piece.color,
-                hasMoved: piece.hasMoved,
-                value: value,
-                binary: value.toString(2).padStart(16, '0'),
-                baseType: `PIECE_${piece.type.toUpperCase()}`,
-                abilityFlags: piece.abilities ? piece.abilities.map(ability => `ABILITY_${ability.toUpperCase()}`) : []
-            });
+            // console.log(`🔍 [WORKER] Converting piece at [${row},${col}]:`, {
+            //     type: piece.type,
+            //     abilities: piece.abilities,
+            //     color: piece.color,
+            //     hasMoved: piece.hasMoved,
+            //     value: value,
+            //     binary: value.toString(2).padStart(16, '0'),
+            //     baseType: `PIECE_${piece.type.toUpperCase()}`,
+            //     abilityFlags: piece.abilities ? piece.abilities.map(ability => `ABILITY_${ability.toUpperCase()}`) : []
+            // });
 
             engineRow.push(value);
         }
@@ -108,7 +111,7 @@ function setBoardState(board, gameState) {
     const isWhiteTurn = gameState.current_turn === 'white';
     
     // Debug log the conversion
-    console.log('🎯 [WORKER] Setting board state with turn:', isWhiteTurn);
+    // console.log('🎯 [WORKER] Setting board state with turn:', isWhiteTurn);
     
     return engine.setBoardState(engineBoard, isWhiteTurn);
 }
@@ -116,6 +119,7 @@ function setBoardState(board, gameState) {
 // Handle messages
 self.onmessage = async function(e) {
     const { type, data, id } = e.data;
+    // console.log('🎬🎬🎬 ENGINE WORKER RECEIVED MESSAGE 🎬🎬🎬:', { type, id, data });
     
     try {
         switch (type) {
@@ -135,7 +139,30 @@ self.onmessage = async function(e) {
                     return;
                 }
                 
+                // Get current position evaluation
+                let currentEval = 0;
+                try {
+                    currentEval = engine.getEvaluation ? engine.getEvaluation() : 0;
+                } catch (e) {
+                    // If getEvaluation doesn't exist, try other methods
+                    try {
+                        currentEval = engine.evaluate ? engine.evaluate() : 0;
+                    } catch (e2) {
+                        currentEval = 0;
+                    }
+                }
+                
+                console.log('⭐⭐⭐ ENGINE POSITION EVAL ⭐⭐⭐:', currentEval);
+                
                 const engineMove = engine.findBestMove(data.depth || 3, data.timeLimit || 5000);
+                
+                console.log('🎯🎯🎯 ENGINE BEST MOVE RESULT 🎯🎯🎯:', {
+                    move: engineMove,
+                    from: engineMove ? [engineMove.from_row, engineMove.from_col] : null,
+                    to: engineMove ? [engineMove.to_row, engineMove.to_col] : null,
+                    flags: engineMove ? engineMove.flags : null,
+                    evaluation: engineMove ? engineMove.evaluation : null
+                });
                 
                 let move = null;
                 if (engineMove && engineMove.from_row !== undefined) {
@@ -179,6 +206,53 @@ self.onmessage = async function(e) {
                 postMessage({ type: 'legalMoves', id, data: convertedMoves });
                 break;
                 
+            case 'getMoveWithFlags':
+                if (!isInitialized) {
+                    postMessage({ type: 'error', id, error: 'Engine not initialized' });
+                    return;
+                }
+                
+                const setBoardSuccess4 = setBoardState(data.board, data.gameState);
+                if (!setBoardSuccess4) {
+                    postMessage({ type: 'error', id, error: 'Failed to set board state' });
+                    return;
+                }
+                
+                // Get all legal moves and find the ones matching from/to
+                const allMoves = engine.getLegalMoves();
+                const matchingMoves = [];
+                
+                // Only show legal moves count without details
+                console.log('📋 ENGINE LEGAL MOVES:', allMoves.length);
+                
+                for (let i = 0; i < allMoves.length; i++) {
+                    const move = allMoves[i];
+                    if (move.from_row === data.from[0] && 
+                        move.from_col === data.from[1] && 
+                        move.to_row === data.to[0] && 
+                        move.to_col === data.to[1]) {
+                        
+                        const moveFlags = move.flags || 0;
+                        // console.log('ENGINE MOVE MATCH:', {
+                        //     from: [move.from_row, move.from_col],
+                        //     to: [move.to_row, move.to_col],
+                        //     flags: moveFlags
+                        // });
+                        
+                        matchingMoves.push({
+                            from: [move.from_row, move.from_col],
+                            to: [move.to_row, move.to_col],
+                            flags: moveFlags
+                        });
+                    }
+                }
+                
+                // If multiple moves (promotion options), return all
+                // If single move, return just that move
+                const result = matchingMoves.length === 1 ? matchingMoves[0] : matchingMoves;
+                postMessage({ type: 'moveWithFlags', id, data: result });
+                break;
+            
             case 'isInCheck':
                 if (!isInitialized) {
                     postMessage({ type: 'error', id, error: 'Engine not initialized' });

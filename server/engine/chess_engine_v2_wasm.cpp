@@ -1,9 +1,10 @@
 /*
- * Chess Engine WASM Interface
- * Provides C++ chess engine functionality for WebAssembly compilation
+ * Chess Engine V2 WASM Interface
+ * Provides C++ chess engine V2 functionality for WebAssembly compilation
+ * API-compatible with the original chess_engine_wasm.cpp
  */
 
-#include "chess_engine.hpp"
+#include "chess_engine_v2.hpp"
 #include <emscripten/emscripten.h>
 #include <emscripten/bind.h>
 #include <string>
@@ -62,7 +63,7 @@ public:
     val findBestMove(int depth, int time_limit_ms) {
         auto start_time = std::chrono::high_resolution_clock::now();
         
-        Move best_move = engine.find_best_move(depth, time_limit_ms);
+        auto [best_move, score] = engine.get_best_move(depth);
         
         auto end_time = std::chrono::high_resolution_clock::now();
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
@@ -97,7 +98,7 @@ public:
     
     // Get legal moves as JavaScript array
     val getLegalMoves() {
-        auto moves = engine.generate_legal_moves();
+        auto moves = engine.get_legal_moves();
         
         val js_moves = val::array();
         int index = 0;
@@ -123,27 +124,27 @@ public:
     
     // Check if position is in check
     bool isInCheck() {
-        return engine.is_in_check(true); // Check for current player (white)
+        return engine.is_in_check(engine.is_white_to_move()); // Check for current player's king
     }
     
     // Check if position is checkmate
     bool isCheckmate() {
-        auto legal_moves = engine.generate_legal_moves();
-        return legal_moves.empty() && isInCheck();
+        return engine.is_checkmate();
     }
     
     // Check if position is stalemate
     bool isStalemate() {
-        auto legal_moves = engine.generate_legal_moves();
-        return legal_moves.empty() && !isInCheck();
+        return engine.is_stalemate();
     }
     
     // Apply a move to the current state
     bool applyMove(int from_row, int from_col, int to_row, int to_col, int flags = 0) {
-        Move move(from_row, from_col, to_row, to_col, flags);
+        Move move(static_cast<uint8_t>(from_row), static_cast<uint8_t>(from_col), 
+                  static_cast<uint8_t>(to_row), static_cast<uint8_t>(to_col), 
+                  static_cast<uint32_t>(flags));
         
         // Check if move is legal
-        auto legal_moves = engine.generate_legal_moves();
+        auto legal_moves = engine.get_legal_moves();
         bool is_legal = false;
         for (const auto& legal_move : legal_moves) {
             if (legal_move.from_row == move.from_row && 
