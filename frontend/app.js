@@ -2264,17 +2264,22 @@ class ChessApp {
     
     showPossibleMoves(row, col) {
         this.clearPossibleMoves();
-        // Debug print: show possible moves and selected square
-        console.log('showPossibleMoves called for:', row, col);
-        console.log('possibleMoves:', this.possibleMoves);
-        if (!this.possibleMoves || this.possibleMoves.length === 0) {
+        // Deduplicate possible moves
+        const uniqueMoves = this.possibleMoves.filter((move, idx, arr) =>
+            arr.findIndex(m => m.row === move.row && m.col === move.col) === idx
+        );
+        // Debug print: show possible moves and selected square, and call count
+        if (!this._showPossibleMovesCallCount) this._showPossibleMovesCallCount = 0;
+        this._showPossibleMovesCallCount++;
+        console.log('[DEBUG] showPossibleMoves call #', this._showPossibleMovesCallCount, 'for:', row, col);
+        console.log('possibleMoves (deduped):', uniqueMoves);
+        if (!uniqueMoves || uniqueMoves.length === 0) {
             // If no valid moves, show a toast message
             //this.toast('No valid moves available for this piece');
             return;
         }
-        
         // Highlight all possible move squares the same way
-        this.possibleMoves.forEach(move => {
+        uniqueMoves.forEach(move => {
             const square = document.querySelector(`[data-row="${move.row}"][data-col="${move.col}"]`);
             if (square) {
                 square.classList.add('possible-move');
