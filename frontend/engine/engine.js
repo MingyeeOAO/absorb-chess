@@ -218,7 +218,9 @@ class ChessEngine {
 function applyMoveToBoard(board, move) {
     console.log('🎯 [MOVE] Applying move manually:', move);
     
-    const { from, to, flags } = move;
+    // Support both 'flag' and 'flags' for compatibility
+    const { from, to } = move;
+    const flags = (typeof move.flags !== 'undefined') ? move.flags : move.flag;
     const fromPiece = board[from[0]][from[1]];
     const toPiece = board[to[0]][to[1]];
     
@@ -282,7 +284,7 @@ function applyMoveToBoard(board, move) {
         movingPiece.type = promotionPieces[flags];
         movingPiece.abilities = movingPiece.abilities.filter(ability => ability !== 'pawn');
         movingPiece.abilities.push(movingPiece.type); // Ensure promoted piece has its own ability
-        console.log('🎯 [PROMOTION] Pawn promoted to:', movingPiece.type);
+        //console.log('🎯 [PROMOTION] Pawn promoted to:', movingPiece.type);
     } else {
         // Regular capture (if any)
         if (toPiece && toPiece.color !== movingPiece.color) {
@@ -292,7 +294,7 @@ function applyMoveToBoard(board, move) {
     
     // Handle absorption if there's a capture (except for en passant which was handled above)
     if (capturedPiece && capturedPiece.color !== movingPiece.color) {
-        console.log('💥 [ABSORPTION] Capturing piece:', capturedPiece.type, 'with abilities:', capturedPiece.abilities);
+        //console.log('💥 [ABSORPTION] Capturing piece:', capturedPiece.type, 'with abilities:', capturedPiece.abilities);
         
         // ONLY add captured piece's BASE TYPE to abilities (not its inherited abilities)
         if (!movingPiece.abilities) {
@@ -300,10 +302,8 @@ function applyMoveToBoard(board, move) {
         }
         if (!movingPiece.abilities.includes(capturedPiece.type)) {
             movingPiece.abilities.push(capturedPiece.type);
-            console.log('✨ [ABSORPTION] Gained ability:', capturedPiece.type, 'New abilities:', movingPiece.abilities);
-        } else {
-            console.log('ℹ️ [ABSORPTION] Already has ability:', capturedPiece.type);
-        }
+            //console.log('✨ [ABSORPTION] Gained ability:', capturedPiece.type, 'New abilities:', movingPiece.abilities);
+        } 
         
         // NO LONGER inheriting all abilities from captured piece
         // This was causing the bug where capturing a multi-ability piece gave too many abilities

@@ -378,17 +378,19 @@ void ChessEngine::add_moves_from_bitboard(int from_square, uint64_t targets, std
 }
 
 void ChessEngine::add_pawn_moves(int from_square, uint64_t targets, bool white, std::vector<Move>& moves) const {
-    int promotion_rank = white ? 0 : 7;
+    int promotion_rank = white ? 7 : 0; // white promotes to rank 7 (row 7), black to rank 0 (row 0)
     while (targets) {
         int to = bitscan_forward(targets);
         targets = clear_lsb(targets);
         int to_row = row_of(to);
-        // promotion flags: 4=queen,5=rook,6=bishop,7=knight (keeps compatibility with apply_move_bb mapping below)
+        // promotion flags: 4=queen,5=rook,6=bishop,7=knight (lose pawn ability, gain promoted piece ability)
         if (to_row == promotion_rank) {
-            moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 4); // queen
-            moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 5); // rook
-            moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 6); // bishop
-            moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 7); // knight
+            moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 4); // promote to queen
+            moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 5); // promote to rook
+            moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 4); // promote to queen
+            moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 5); // promote to rook
+            moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 6); // promote to bishop
+            moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 7); // promote to knight
         } else {
             moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 0);
         }
@@ -658,7 +660,50 @@ uint64_t ChessEngine::slow_bishop_attacks(int sq, uint64_t blockers) const {
     }
     return attacks;
 }
-// ========== GENERATE LEGAL MOVES (filters check) ==========
+// ========== FAST CHECK DETECTION USING MAGIC BITBOARDS ==========
+bool ChessEngine::is_square_attacked_fast(int square, bool by_white) const {
+    int attacking_color = by_white ? 0 : 1;
+
+    // Pawn ability (including non-pawns with pawn ability)
+    uint64_t pawn_attackers = ability_bb[attacking_color][0];
+    uint64_t pawn_attacks_mask = pawn_attacks[by_white ? 1 : 0][square];
+    if (pawn_attacks_mask & pawn_attackers) return true;
+
+    // Knight ability
+    uint64_t knight_attackers = ability_bb[attacking_color][1];
+    if (knight_attacks[square] & knight_attackers) return true;
+
+    // Bishop ability
+    uint64_t bishop_attackers = ability_bb[attacking_color][2];
+    uint64_t bishop_attacks_mask = get_bishop_attacks(square, occupancy_all);
+    if (bishop_attacks_mask & bishop_attackers) return true;
+
+    // Rook ability
+    uint64_t rook_attackers = ability_bb[attacking_color][3];
+    uint64_t rook_attacks_mask = get_rook_attacks(square, occupancy_all);
+    if (rook_attacks_mask & rook_attackers) return true;
+
+    // Queen ability
+    uint64_t queen_attackers = ability_bb[attacking_color][4];
+    // Queen can attack as both rook and bishop
+    if ((rook_attacks_mask | bishop_attacks_mask) & queen_attackers) return true;
+
+    // King ability
+    uint64_t king_attackers = ability_bb[attacking_color][5];
+    if (king_attacks[square] & king_attackers) return true;
+
+    return false;
+}
+
+bool ChessEngine::is_in_check_fast(bool white_king) const {
+    int king_color = white_king ? 0 : 1;
+    uint64_t king_bb = piece_bb[king_color][5];
+    if (!king_bb) return false;
+    int king_square = bitscan_forward(king_bb);
+    return is_square_attacked_fast(king_square, !white_king);
+}
+
+// ========== OPTIMIZED LEGAL MOVE GENERATION ==========
 std::vector<Move> ChessEngine::generate_legal_moves() {
     std::vector<Move> moves;
     generate_pawn_moves_bb(white_to_move, moves);
@@ -667,22 +712,408 @@ std::vector<Move> ChessEngine::generate_legal_moves() {
     generate_rook_moves_bb(white_to_move, moves);
     generate_queen_moves_bb(white_to_move, moves);
     generate_king_moves_bb(white_to_move, moves);
+    generate_castling_moves_bb(white_to_move, moves);
     
-    
-    
+    // Fast legality filtering - avoid vector.erase by building new vector
     std::vector<Move> legal;
-    bool original_turn = white_to_move;
+    legal.reserve(moves.size()); // Pre-allocate to avoid reallocations
+    
+    int king_color = white_to_move ? 0 : 1;
+    uint64_t king_bb = piece_bb[king_color][5];
+    if (!king_bb) return legal; // No king, no legal moves
+    
+    int king_square = bitscan_forward(king_bb);
+    bool in_check = is_in_check_fast(white_to_move);
+    
+    // Get checkers and pins for optimized filtering
+    uint64_t checkers = get_checkers(white_to_move);
+    uint64_t pinned_pieces = get_pinned_pieces(white_to_move);
+    
+    int num_checkers = popcount(checkers);
+    
     for (const Move& m : moves) {
-        MoveUndoBB undo = apply_move_bb(m);
-        // is_in_check expects a bool meaning "white king?" so pass original_turn
-        if (!is_in_check(original_turn)) legal.push_back(m);
-        undo_move_bb(m, undo);
+        if (is_legal_move_fast(m, king_square, in_check, num_checkers, checkers, pinned_pieces)) {
+            legal.push_back(m);
+        }
     }
     return legal;
 }
 
+bool ChessEngine::is_legal_move_fast(const Move& move, int king_square, bool in_check, 
+                                    int num_checkers, uint64_t checkers, uint64_t pinned_pieces)  {
+    int from_sq = move.from_row * 8 + move.from_col;
+    int to_sq = move.to_row * 8 + move.to_col;
+    
+    // King moves - must not move to attacked square
+    if (from_sq == king_square) {
+        // For king moves, we need to check if destination is safe
+        // If capturing a piece, temporarily remove both king and captured piece
+        return is_king_capture_safe(to_sq);
+    }
+    
+    // If not in check, only need to verify piece is not pinned or moves along pin ray
+    if (!in_check) {
+        if (pinned_pieces & (1ULL << from_sq)) {
+            return is_move_along_pin_ray(from_sq, to_sq, king_square);
+        }
+        return true; // Not pinned, not in check - legal
+    }
+    
+    // In check - different rules based on number of checkers
+    if (num_checkers > 1) {
+        // Double check - only king moves allowed (already handled above)
+        return false;
+    }
+    
+    // Single check - can capture checker, block, or move king
+    int checker_square = bitscan_forward(checkers);
+    
+    // Check if move captures the checking piece
+    if (to_sq == checker_square) {
+        // Verify the moving piece is not pinned (unless moving along pin ray)
+        if (pinned_pieces & (1ULL << from_sq)) {
+            return is_move_along_pin_ray(from_sq, to_sq, king_square);
+        }
+        return true;
+    }
+    
+    // Check if move blocks the check (only possible for sliding piece checks)
+    if (is_sliding_check(checker_square, king_square)) {
+        uint64_t block_squares = get_squares_between(checker_square, king_square);
+        if (block_squares & (1ULL << to_sq)) {
+            // Verify the moving piece is not pinned
+            if (pinned_pieces & (1ULL << from_sq)) {
+                return is_move_along_pin_ray(from_sq, to_sq, king_square);
+            }
+            return true;
+        }
+    }
+    
+    return false; // Move doesn't resolve check
+}
+
+uint64_t ChessEngine::get_checkers(bool white_king) const {
+    int king_color = white_king ? 0 : 1;
+    uint64_t king_bb = piece_bb[king_color][5];
+    if (!king_bb) return 0;
+    
+    int king_square = bitscan_forward(king_bb);
+    uint64_t checkers = 0;
+    int enemy_color = white_king ? 1 : 0;
+    
+    // Check for pawn attacks
+    uint64_t pawn_attackers = ability_bb[enemy_color][0];
+    uint64_t pawn_attack_mask = pawn_attacks[white_king ? 1 : 0][king_square];
+    checkers |= (pawn_attack_mask & pawn_attackers);
+    
+    // Check for knight attacks
+    uint64_t knight_attackers = ability_bb[enemy_color][1];
+    checkers |= (knight_attacks[king_square] & knight_attackers);
+    
+    // Check for sliding piece attacks
+    uint64_t bishop_attackers = ability_bb[enemy_color][2];
+    uint64_t bishop_attacks_mask = get_bishop_attacks(king_square, occupancy_all);
+    checkers |= (bishop_attacks_mask & bishop_attackers);
+    
+    uint64_t rook_attackers = ability_bb[enemy_color][3];
+    uint64_t rook_attacks_mask = get_rook_attacks(king_square, occupancy_all);
+    checkers |= (rook_attacks_mask & rook_attackers);
+    
+    uint64_t queen_attackers = ability_bb[enemy_color][4];
+    checkers |= ((rook_attacks_mask | bishop_attacks_mask) & queen_attackers);
+    
+    return checkers;
+}
+
+uint64_t ChessEngine::get_pinned_pieces(bool white_king) const {
+    int king_color = white_king ? 0 : 1;
+    uint64_t king_bb = piece_bb[king_color][5];
+    if (!king_bb) return 0;
+    
+    int king_square = bitscan_forward(king_bb);
+    uint64_t pinned = 0;
+    int enemy_color = white_king ? 1 : 0;
+    
+    // Check for pins by sliding pieces (rooks, bishops, queens)
+    uint64_t enemy_rooks = ability_bb[enemy_color][3];
+    uint64_t enemy_bishops = ability_bb[enemy_color][2];
+    uint64_t enemy_queens = ability_bb[enemy_color][4];
+    
+    // Check rook-like pins (horizontal and vertical)
+    uint64_t rook_attackers = enemy_rooks | enemy_queens;
+    while (rook_attackers) {
+        int attacker_sq = bitscan_forward(rook_attackers);
+        rook_attackers &= rook_attackers - 1; // Clear LSB
+        
+        if (are_aligned_rank_or_file(king_square, attacker_sq)) {
+            uint64_t between = get_squares_between(king_square, attacker_sq);
+            int piece_count = popcount(between & occupancy_all);
+            if (piece_count == 1) {
+                // Exactly one piece between - it's pinned
+                pinned |= (between & occupancy_all);
+            }
+        }
+    }
+    
+    // Check bishop-like pins (diagonals)
+    uint64_t bishop_attackers = enemy_bishops | enemy_queens;
+    while (bishop_attackers) {
+        int attacker_sq = bitscan_forward(bishop_attackers);
+        bishop_attackers &= bishop_attackers - 1; // Clear LSB
+        
+        if (are_aligned_diagonal(king_square, attacker_sq)) {
+            uint64_t between = get_squares_between(king_square, attacker_sq);
+            int piece_count = popcount(between & occupancy_all);
+            if (piece_count == 1) {
+                // Exactly one piece between - it's pinned
+                pinned |= (between & occupancy_all);
+            }
+        }
+    }
+    
+    return pinned & (white_king ? occupancy_white : occupancy_black); // Only our pieces can be pinned
+}
+
 std::vector<Move> ChessEngine::generate_legal_moves() const {
     return const_cast<ChessEngine*>(this)->generate_legal_moves();
+}
+
+std::vector<Move> ChessEngine::generate_capture_moves() {
+    std::vector<Move> moves;
+    generate_pawn_moves_bb(white_to_move, moves);
+    generate_knight_moves_bb(white_to_move, moves);
+    generate_bishop_moves_bb(white_to_move, moves);
+    generate_rook_moves_bb(white_to_move, moves);
+    generate_queen_moves_bb(white_to_move, moves);
+    generate_king_moves_bb(white_to_move, moves);
+    
+    // Filter only capture moves
+    std::vector<Move> captures;
+    for (const Move& m : moves) {
+        if (get_piece_at_square(m.to_row, m.to_col) != EMPTY) {
+            bool original_turn = white_to_move;
+            MoveUndoBB undo = apply_move_bb(m);
+            if (!is_in_check_fast(original_turn)) captures.push_back(m);
+            undo_move_bb(m, undo);
+        }
+    }
+    return captures;
+}
+
+int ChessEngine::get_piece_value(int piece) const {
+    switch (piece & PIECE_MASK) {
+        case PAWN: return 100;
+        case KNIGHT: return 300;
+        case BISHOP: return 300;
+        case ROOK: return 500;
+        case QUEEN: return 900;
+        case KING: return 0; // King cannot be captured
+        default: return 0;
+    }
+}
+
+bool ChessEngine::is_king_move_safe(int to_square) {
+    // Check if to_square is attacked by enemy pieces
+    // We need to temporarily remove our king from occupancy to check if the square is safe
+    
+    int king_color = white_to_move ? 0 : 1;
+    uint64_t king_bb = piece_bb[king_color][5];
+    if (!king_bb) return false; // No king
+    
+    int king_sq = bitscan_forward(king_bb);
+    
+    // Temporarily remove king and update occupancy
+    piece_bb[king_color][5] = 0;
+    update_occupancy();
+    
+    bool safe = !is_square_attacked_fast(to_square, !white_to_move);
+    
+    // Restore king and update occupancy
+    piece_bb[king_color][5] = king_bb;
+    update_occupancy();
+    
+    return safe;
+}
+
+bool ChessEngine::is_king_capture_safe(int to_square) {
+    // Check if king can safely move to to_square, accounting for captured piece
+    
+    int king_color = white_to_move ? 0 : 1;
+    uint64_t king_bb = piece_bb[king_color][5];
+    if (!king_bb) return false; // No king
+    
+    // Check if there's a piece being captured
+    int to_row = row_of(to_square);
+    int to_col = col_of(to_square);
+    uint32_t captured_piece = get_piece_at_square(to_row, to_col);
+    
+    // Temporarily remove king from current position
+    piece_bb[king_color][5] = 0;
+    
+    // If capturing a piece, temporarily remove it too
+    uint64_t* captured_piece_bb = nullptr;
+    uint64_t original_captured_bb = 0;
+    
+    if (captured_piece != EMPTY) {
+        int captured_color = (captured_piece & IS_WHITE) ? 0 : 1;
+        int captured_type = -1;
+        
+        // Find which piece type is being captured
+        for (int piece_type = 0; piece_type < 6; piece_type++) {
+            uint64_t test_bb = piece_bb[captured_color][piece_type];
+            if (test_bb & (1ULL << to_square)) {
+                captured_piece_bb = &piece_bb[captured_color][piece_type];
+                original_captured_bb = test_bb;
+                *captured_piece_bb &= ~(1ULL << to_square); // Remove captured piece
+                break;
+            }
+        }
+    }
+    
+    update_occupancy();
+    
+    bool safe = !is_square_attacked_fast(to_square, !white_to_move);
+    
+    // Restore king
+    piece_bb[king_color][5] = king_bb;
+    
+    // Restore captured piece if there was one
+    if (captured_piece_bb) {
+        *captured_piece_bb = original_captured_bb;
+    }
+    
+    update_occupancy();
+    
+    return safe;
+}
+
+bool ChessEngine::is_move_along_pin_ray(int from_sq, int to_sq, int king_square) const {
+    // Check if the move is along the same line as the pin
+    if (are_aligned_rank_or_file(from_sq, king_square)) {
+        return are_aligned_rank_or_file(to_sq, king_square) && 
+               are_aligned_rank_or_file(from_sq, to_sq);
+    } else if (are_aligned_diagonal(from_sq, king_square)) {
+        return are_aligned_diagonal(to_sq, king_square) && 
+               are_aligned_diagonal(from_sq, to_sq);
+    }
+    return false;
+}
+
+bool ChessEngine::is_sliding_check(int checker_square, int king_square) const {
+    int checker_row = row_of(checker_square);
+    int checker_col = col_of(checker_square);
+    int checker_piece = get_piece_at_square(checker_row, checker_col) & PIECE_MASK;
+    return (checker_piece == PIECE_ROOK || checker_piece == PIECE_BISHOP || checker_piece == PIECE_QUEEN);
+}
+
+uint64_t ChessEngine::get_squares_between(int sq1, int sq2) const {
+    if (sq1 == sq2) return 0;
+    
+    int r1 = row_of(sq1), c1 = col_of(sq1);
+    int r2 = row_of(sq2), c2 = col_of(sq2);
+    
+    uint64_t between = 0;
+    
+    // Determine direction
+    int dr = (r2 > r1) ? 1 : (r2 < r1) ? -1 : 0;
+    int dc = (c2 > c1) ? 1 : (c2 < c1) ? -1 : 0;
+    
+    // Make sure they are aligned
+    if (dr != 0 && dc != 0 && abs(r2 - r1) != abs(c2 - c1)) return 0; // Not diagonal
+    if (dr == 0 && dc == 0) return 0; // Same square
+    if (dr != 0 && dc != 0 && dr * dc == 0) return 0; // Not aligned
+    
+    int r = r1 + dr, c = c1 + dc;
+    while (r != r2 || c != c2) {
+        if (r >= 0 && r < 8 && c >= 0 && c < 8) {
+            between |= (1ULL << (r * 8 + c));
+        }
+        r += dr;
+        c += dc;
+    }
+    
+    return between;
+}
+
+bool ChessEngine::are_aligned_rank_or_file(int sq1, int sq2) const {
+    return (row_of(sq1) == row_of(sq2)) || (col_of(sq1) == col_of(sq2));
+}
+
+bool ChessEngine::are_aligned_diagonal(int sq1, int sq2) const {
+    int dr = abs(row_of(sq1) - row_of(sq2));
+    int dc = abs(col_of(sq1) - col_of(sq2));
+    return dr == dc && dr > 0;
+}
+
+uint32_t ChessEngine::get_piece_at_square(int row, int col) const {
+    int square = row * 8 + col;
+    uint64_t mask = 1ULL << square;
+    
+    // Check white pieces
+    for (int piece = 0; piece < 6; piece++) {
+        if (piece_bb[0][piece] & mask) {
+            uint32_t result = 0;
+            switch (piece) {
+                case 0: result |= PIECE_PAWN; break;
+                case 1: result |= PIECE_KNIGHT; break;
+                case 2: result |= PIECE_BISHOP; break;
+                case 3: result |= PIECE_ROOK; break;
+                case 4: result |= PIECE_QUEEN; break;
+                case 5: result |= PIECE_KING; break;
+            }
+            result |= IS_WHITE;
+            if (has_moved_bb[0] & mask) result |= HAS_MOVED;
+            
+            // Add abilities
+            for (int ability = 0; ability < 6; ability++) {
+                if (ability_bb[0][ability] & mask) {
+                    switch (ability) {
+                        case 0: result |= ABILITY_PAWN; break;
+                        case 1: result |= ABILITY_KNIGHT; break;
+                        case 2: result |= ABILITY_BISHOP; break;
+                        case 3: result |= ABILITY_ROOK; break;
+                        case 4: result |= ABILITY_QUEEN; break;
+                        case 5: result |= ABILITY_KING; break;
+                    }
+                }
+            }
+            return result;
+        }
+    }
+    
+    // Check black pieces
+    for (int piece = 0; piece < 6; piece++) {
+        if (piece_bb[1][piece] & mask) {
+            uint32_t result = 0;
+            switch (piece) {
+                case 0: result |= PIECE_PAWN; break;
+                case 1: result |= PIECE_KNIGHT; break;
+                case 2: result |= PIECE_BISHOP; break;
+                case 3: result |= PIECE_ROOK; break;
+                case 4: result |= PIECE_QUEEN; break;
+                case 5: result |= PIECE_KING; break;
+            }
+            // Black pieces don't have IS_WHITE flag
+            if (has_moved_bb[1] & mask) result |= HAS_MOVED;
+            
+            // Add abilities
+            for (int ability = 0; ability < 6; ability++) {
+                if (ability_bb[1][ability] & mask) {
+                    switch (ability) {
+                        case 0: result |= ABILITY_PAWN; break;
+                        case 1: result |= ABILITY_KNIGHT; break;
+                        case 2: result |= ABILITY_BISHOP; break;
+                        case 3: result |= ABILITY_ROOK; break;
+                        case 4: result |= ABILITY_QUEEN; break;
+                        case 5: result |= ABILITY_KING; break;
+                    }
+                }
+            }
+            return result;
+        }
+    }
+    
+    return EMPTY; // No piece at this square
 }
 
 // ========== EVALUATION HELPERS ==========
@@ -791,7 +1222,103 @@ int ChessEngine::evaluate_mobility_bb() const {
     uint64_t b_atk = get_all_attacks(false);
     int w_mob = popcount(w_atk & ~occupancy_white);
     int b_mob = popcount(b_atk & ~occupancy_black);
-    return (w_mob - b_mob) * 10;
+    
+    int mobility_score = (w_mob - b_mob) * 5;
+    
+    // Enhanced development evaluation
+    int development_panelty = evaluate_development();
+    
+    return mobility_score + development_panelty;
+}
+int ChessEngine::evaluate_development() const {
+    int development_delta = 0;
+
+    int white_developed = count_developed_pieces(true);
+    int black_developed = count_developed_pieces(false);
+    int development_diff = white_developed - black_developed;
+
+    // Positive -> white is more developed; negative -> black more developed.
+    // We want to reward development for white (so positive * +) and penalize for white lagging.
+    development_delta += development_diff * 25; // 25 points per development difference
+
+    // White queen early penalty: we subtract (bad for white)
+    uint64_t white_queen = piece_bb[0][4];
+    if (white_queen) {
+        int queen_sq = bitscan_forward(white_queen);
+        int queen_row = row_of(queen_sq);
+        if (queen_row != 7) {
+            uint64_t white_knights = piece_bb[0][1];
+            uint64_t white_bishops = piece_bb[0][2];
+            int undeveloped_minors = 0;
+            if (white_knights & (1ULL << 57)) undeveloped_minors++;
+            if (white_knights & (1ULL << 62)) undeveloped_minors++;
+            if (white_bishops & (1ULL << 58)) undeveloped_minors++;
+            if (white_bishops & (1ULL << 61)) undeveloped_minors++;
+            development_delta -= undeveloped_minors * 40; // subtract for white (penalty)
+            if (queen_row >= 4 && queen_row <= 5) development_delta -= 30;
+        }
+    }
+
+    // Black queen early penalty: this should affect evaluation with opposite sign.
+    uint64_t black_queen = piece_bb[1][4];
+    if (black_queen) {
+        int queen_sq = bitscan_forward(black_queen);
+        int queen_row = row_of(queen_sq);
+        if (queen_row != 0) {
+            uint64_t black_knights = piece_bb[1][1];
+            uint64_t black_bishops = piece_bb[1][2];
+            int undeveloped_minors = 0;
+            if (black_knights & (1ULL << 1)) undeveloped_minors++;
+            if (black_knights & (1ULL << 6)) undeveloped_minors++;
+            if (black_bishops & (1ULL << 2)) undeveloped_minors++;
+            if (black_bishops & (1ULL << 5)) undeveloped_minors++;
+            development_delta += undeveloped_minors * 40; // add (good for white if black is undeveloped)
+            if (queen_row >= 2 && queen_row <= 3) development_delta += 30;
+        }
+    }
+
+
+    return development_delta;
+}
+
+
+int ChessEngine::count_developed_pieces(bool white) const {
+    int developed = 0;
+    int color = white ? 0 : 1;
+    
+    // Count developed knights (not on starting squares)
+    uint64_t knights = piece_bb[color][1];
+    if (white) {
+        // White knights start on b1(57) and g1(62)
+        if (knights & ~((1ULL << 57) | (1ULL << 62))) {
+            developed += popcount(knights & ~((1ULL << 57) | (1ULL << 62)));
+        }
+    } else {
+        // Black knights start on b8(1) and g8(6)
+        if (knights & ~((1ULL << 1) | (1ULL << 6))) {
+            developed += popcount(knights & ~((1ULL << 1) | (1ULL << 6)));
+        }
+    }
+    
+    // Count developed bishops (not on starting squares)
+    uint64_t bishops = piece_bb[color][2];
+    if (white) {
+        // White bishops start on c1(58) and f1(61)
+        if (bishops & ~((1ULL << 58) | (1ULL << 61))) {
+            developed += popcount(bishops & ~((1ULL << 58) | (1ULL << 61)));
+        }
+    } else {
+        // Black bishops start on c8(2) and f8(5)
+        if (bishops & ~((1ULL << 2) | (1ULL << 5))) {
+            developed += popcount(bishops & ~((1ULL << 2) | (1ULL << 5)));
+        }
+    }
+    
+    // Bonus for castling (completed development)
+    if (white && white_king_castled) developed += 2;
+    if (!white && black_king_castled) developed += 2;
+    
+    return developed;
 }
 
 int ChessEngine::evaluate_king_safety_bb() const {
@@ -1053,86 +1580,30 @@ int ChessEngine::minimax_bb(int depth, int alpha, int beta, bool maximizing) {
 int ChessEngine::quiescence_search_bb(int alpha, int beta) {
     quiescence_nodes++;
     int stand_pat = evaluate_position();
+    
+    // Fail-high cutoff
     if (stand_pat >= beta) return beta;
+    
+    // Update alpha if stand-pat is better
     if (alpha < stand_pat) alpha = stand_pat;
 
-    // TODO: implement capture-only generation and examine captures
-    // For now return stand_pat (safe but limited quiescence)
-    return stand_pat;
-}
-
-Move ChessEngine::find_best_move(int depth, int time_limit_ms) {
-    nodes_searched = 0;
-    quiescence_nodes = 0;
-    auto start = std::chrono::high_resolution_clock::now();
+    // Generate only capture moves for quiescence search
+    std::vector<Move> captures = generate_capture_moves();
     
-    std::vector<Move> moves = generate_legal_moves();
-    if (moves.empty()) return Move(0,0,0,0);
+    for (const Move& cap : captures) {
+        // Delta pruning: if even capturing the most valuable piece won't improve alpha enough
+        int captured_value = get_piece_value(get_piece_at_square(cap.to_row, cap.to_col));
+        if (stand_pat + captured_value + 200 < alpha) continue; // 200 margin for safety
+        
+        MoveUndoBB undo = apply_move_bb(cap);
+        int score = -quiescence_search_bb(-beta, -alpha);
+        undo_move_bb(cap, undo);
+        
+        if (score >= beta) return beta; // Beta cutoff
+        if (score > alpha) alpha = score; // Update alpha
+    }
     
-    Move best = moves[0];
-    int best_eval = white_to_move ? INT_MIN : INT_MAX;
-    
-    for (const Move& m : moves) {
-        MoveUndoBB undo = apply_move_bb(m);
-        int score = minimax_bb(depth - 1, INT_MIN, INT_MAX, white_to_move);
-        undo_move_bb(m, undo);
-        if ((white_to_move && score > best_eval) || (!white_to_move && score < best_eval)) {
-            best_eval = score;
-            best = m;
-        }
-        auto now = std::chrono::high_resolution_clock::now();
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start);
-        if (elapsed.count() >= time_limit_ms) break;
-    }
-    return best;
-}
-
-// ========== UTIL & API ==========
-bool ChessEngine::is_white_to_move() const { return white_to_move; }
-
-bool ChessEngine::is_checkmate() const {
-    if (!is_in_check(white_to_move)) return false;
-    return generate_legal_moves().empty();
-}
-
-bool ChessEngine::is_stalemate() const {
-    if (is_in_check(white_to_move)) return false;
-    return generate_legal_moves().empty();
-}
-
-bool ChessEngine::is_game_over() const { return is_checkmate() || is_stalemate(); }
-
-void ChessEngine::print_bitboards() const {
-    const char* names[] = {"Pawn","Knight","Bishop","Rook","Queen","King"};
-    const char* cols[] = {"White","Black"};
-    for (int color = 0; color < 2; ++color) {
-        std::cout << "\n" << cols[color] << " pieces:\n";
-        for (int p = 0; p < 6; ++p) {
-            std::cout << names[p] << ": ";
-            uint64_t bb = piece_bb[color][p];
-            while (bb) {
-                int sq = bitscan_forward(bb);
-                bb = clear_lsb(bb);
-                std::cout << (char)('a' + col_of(sq)) << (8 - row_of(sq)) << " ";
-            }
-            std::cout << "\n";
-        }
-    }
-    std::cout << "\nOccupancy: White=" << popcount(occupancy_white)
-    << " Black=" << popcount(occupancy_black)
-    << " All=" << popcount(occupancy_all) << "\n";
-}
-
-uint64_t ChessEngine::perft(int depth) {
-    if (depth == 0) return 1;
-    uint64_t nodes = 0;
-    std::vector<Move> moves = generate_legal_moves();
-    for (const Move& m : moves) {
-        MoveUndoBB undo = apply_move_bb(m);
-        nodes += perft(depth - 1);
-        undo_move_bb(m, undo);
-    }
-    return nodes;
+    return alpha;
 }
 
 std::pair<Move,int> ChessEngine::get_best_move(int depth) {
@@ -1146,7 +1617,8 @@ std::pair<Move,int> ChessEngine::get_best_move(int depth) {
         int score = minimax_bb(depth - 1, INT_MIN, INT_MAX, white_to_move);
         undo_move_bb(m, undo);
         if ((white_to_move && score > best_score) || (!white_to_move && score < best_score)) {
-            best_score = score; best = m;
+            best_score = score; 
+            best = m; // Keep original flags including promotion
         }
     }
     return {best, best_score};
@@ -1389,6 +1861,21 @@ void ChessEngine::debug_one_mismatch(int sq, uint64_t mask, uint64_t blockers, u
     std::cerr << "slow hex:  0x" << std::hex << slow << std::dec << "\n" << bitboard_to_string(slow);
     std::cerr << "magic hex: 0x" << std::hex << magic << std::dec << "\n" << bitboard_to_string(magic);
 }
+
+// ========== UTIL & API ==========
+bool ChessEngine::is_white_to_move() const { return white_to_move; }
+
+bool ChessEngine::is_checkmate() const {
+    if (!is_in_check(white_to_move)) return false;
+    return generate_legal_moves().empty();
+}
+
+bool ChessEngine::is_stalemate() const {
+    if (is_in_check(white_to_move)) return false;
+    return generate_legal_moves().empty();
+}
+
+bool ChessEngine::is_game_over() const { return is_checkmate() || is_stalemate(); }
 
 
 #ifdef TEST_MAGIC_VERIFY

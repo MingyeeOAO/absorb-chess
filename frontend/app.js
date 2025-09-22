@@ -1830,29 +1830,30 @@ class ChessApp {
     async handleBotGameMove(from, to) {
         try {
             console.log('🎮 Handling bot game move:', from, to);
-            
             // Get the complete move with flags from engine
-            const moveResult = await this.bot.engine.getMoveWithFlags(
+            let moveResult = await this.bot.engine.getMoveWithFlags(
                 this.gameState.board, 
                 this.gameState,
                 [from.row, from.col],
                 [to.row, to.col]
             );
-            
             if (!moveResult) {
                 console.error('❌ Invalid move - not found in legal moves');
                 return;
             }
-            
-            console.log('🎯 Move result from engine:', moveResult);
-            
+            // Detect castling for player (if engine does not provide flag)
+            function detectCastlingFlag(piece, from, to) {
+                if (!piece || piece.type !== 'king') return 0;
+                // King-side castling
+                if (from.row === to.row && to.col - from.col === 2) return 2; // flag 2
+                // Queen-side castling
+                if (from.row === to.row && from.col - to.col === 2) return 3; // flag 3
+                return 0;
+            }
             // Handle multiple moves (promotion options)
             if (Array.isArray(moveResult)) {
-                console.log('🎯 Multiple moves found:', moveResult);
-                
                 // Check if these are actually promotion moves (flags 4-7)
                 const hasPromotionMoves = moveResult.some(move => move.flags >= 4 && move.flags <= 7);
-                
                 if (hasPromotionMoves) {
                     // Verify this is a pawn reaching promotion rank
                     const firstMove = moveResult[0];
@@ -1860,70 +1861,48 @@ class ChessApp {
                     const isActualPawnPromotion = (piece && piece.type === 'pawn' && 
                         ((piece.color === 'white' && firstMove.to[0] === 0) || 
                          (piece.color === 'black' && firstMove.to[0] === 7)));
-                    
                     if (isActualPawnPromotion) {
-                        console.log('🎯 Confirmed multiple promotion options found');
                         this.showPromotionModalForMove(firstMove);
                         return;
-                    } else {
-                        console.warn('⚠️ Multiple moves with promotion flags but not a pawn promotion');
                     }
                 }
-                
                 // If not promotion moves, just use the first move
-                console.log('🔧 Multiple non-promotion moves, using first move');
                 const moveToUse = moveResult[0];
-                moveToUse.flags = 0; // Ensure flags are clean
-                
-                // Apply move locally using engine
+                // Detect castling for player
+                const piece = this.gameState.board[moveToUse.from[0]][moveToUse.from[1]];
+                const castlingFlag = detectCastlingFlag(piece, {row: moveToUse.from[0], col: moveToUse.from[1]}, {row: moveToUse.to[0], col: moveToUse.to[1]});
+                moveToUse.flags = castlingFlag;
                 const success = await this.applyLocalMove(moveToUse);
-                console.log('🔍 [TURN] After applyLocalMove, current_turn:', this.gameState.current_turn);
-                
                 if (success && this.bot) {
-                    // Notify bot of player move
-                    console.log('🔍 [TURN] Before bot.onPlayerMove, current_turn:', this.gameState.current_turn);
                     await this.bot.onPlayerMove(moveToUse);
-                    console.log('🔍 [TURN] After bot.onPlayerMove, current_turn:', this.gameState.current_turn);
-                    
-                    // After player move, trigger bot move
                     this.handleNextTurn();
                 }
                 return;
             }
-            
             // Single move - check if it's a promotion that needs user input
-            const completeMove = moveResult;
-            
+            let completeMove = moveResult;
+            // Detect castling for player
+            const piece = this.gameState.board[completeMove.from[0]][completeMove.from[1]];
+            const castlingFlag = detectCastlingFlag(piece, {row: completeMove.from[0], col: completeMove.from[1]}, {row: completeMove.to[0], col: completeMove.to[1]});
+            if ((completeMove.flags === undefined || completeMove.flags === 0) && castlingFlag) {
+                completeMove.flags = castlingFlag;
+            }
             // More robust promotion check: must have promotion flags AND be an actual pawn promotion
             const hasPromotionFlags = completeMove.flags >= 4 && completeMove.flags <= 7;
             if (hasPromotionFlags) {
-                const piece = this.gameState.board[completeMove.from[0]][completeMove.from[1]];
                 const isActualPawnPromotion = (piece && piece.type === 'pawn' && 
                     ((piece.color === 'white' && completeMove.to[0] === 0) || 
                      (piece.color === 'black' && completeMove.to[0] === 7)));
-                
                 if (isActualPawnPromotion) {
-                    console.log('🎯 [PROMOTION] Confirmed pawn promotion detected');
                     this.showPromotionModalForMove(completeMove);
                     return;
                 } else {
-                    console.warn('⚠️ [PROMOTION] Move has promotion flags but is not a pawn promotion. Ignoring flags. Piece:', piece?.type, 'Flags:', completeMove.flags);
-                    // Clear the invalid flags to prevent issues downstream
                     completeMove.flags = 0;
                 }
             }
-            
-            // Apply move locally using engine
             const success = await this.applyLocalMove(completeMove);
-            console.log('🔍 [TURN] After applyLocalMove, current_turn:', this.gameState.current_turn);
-            
             if (success && this.bot) {
-                // Notify bot of player move
-                console.log('🔍 [TURN] Before bot.onPlayerMove, current_turn:', this.gameState.current_turn);
                 await this.bot.onPlayerMove(completeMove);
-                console.log('🔍 [TURN] After bot.onPlayerMove, current_turn:', this.gameState.current_turn);
-                
-                // After player move, trigger bot move
                 this.handleNextTurn();
             }
         } catch (error) {

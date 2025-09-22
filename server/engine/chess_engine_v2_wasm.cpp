@@ -77,6 +77,7 @@ public:
         result.set("from_col", best_move.from_col);
         result.set("to_row", best_move.to_row);
         result.set("to_col", best_move.to_col);
+        result.set("flags", best_move.flags);  // Always include flags
         result.set("evaluation", evaluation);
         result.set("time_taken_ms", (int)duration.count());
         result.set("depth_reached", depth);

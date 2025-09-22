@@ -162,14 +162,16 @@ class ChessBot {
             // Show evaluation
             this.showBotEvaluation(move.evaluation);
 
-            // Apply the move using app's existing move logic
+
+            // Relay all move properties, including flags, for correct special move handling
             const botMove = {
                 from: move.from,
                 to: move.to,
+                flags: typeof move.flags !== 'undefined' ? move.flags : undefined,
                 promotionPiece: move.promotionPiece
             };
 
-            console.log(`🤖 Bot plays: [${botMove.from.join(',')}] -> [${botMove.to.join(',')}]${botMove.promotionPiece ? ` (=${botMove.promotionPiece})` : ''}`);
+            console.log(`🤖 Bot plays: [${botMove.from.join(',')}] -> [${botMove.to.join(',')}]${botMove.promotionPiece ? ` (=${botMove.promotionPiece})` : ''}, flags: ${botMove.flags}`);
 
             // Use app's move application logic
             await this.app.applyBotMove(botMove);

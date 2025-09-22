@@ -30,6 +30,18 @@ constexpr uint32_t IS_WHITE  = 8192;
 // Color mask
 constexpr uint32_t COLOR_MASK = IS_WHITE;
 
+// Piece type mask and empty square constant
+constexpr uint32_t PIECE_MASK = PIECE_PAWN | PIECE_KNIGHT | PIECE_BISHOP | PIECE_ROOK | PIECE_QUEEN | PIECE_KING;
+constexpr uint32_t EMPTY = 0;
+
+// Simple piece constants for compatibility
+constexpr uint32_t PAWN = PIECE_PAWN;
+constexpr uint32_t KNIGHT = PIECE_KNIGHT;
+constexpr uint32_t BISHOP = PIECE_BISHOP;
+constexpr uint32_t ROOK = PIECE_ROOK;
+constexpr uint32_t QUEEN = PIECE_QUEEN;
+constexpr uint32_t KING = PIECE_KING;
+
 struct Move {
     uint8_t from_row, from_col, to_row, to_col;
     uint32_t flags;  // For special moves (castle, en passant, promotion)
@@ -145,6 +157,8 @@ private:
     uint64_t get_attacks_by_piece_type(int square, int piece_type, bool white, uint64_t blockers) const;
     uint64_t get_all_attacks(bool white) const;
     bool is_square_attacked(int square, bool by_white) const;
+    bool is_square_attacked_fast(int square, bool by_white) const;
+    bool is_in_check_fast(bool white_king) const;
     
     // Bitboard move generation
     void generate_pawn_moves_bb(bool white, std::vector<Move>& moves) const;
@@ -205,8 +219,28 @@ public:
 
     std::vector<Move> generate_legal_moves();
     std::vector<Move> generate_legal_moves() const;
-    Move find_best_move(int depth, int time_limit_ms);
+    std::vector<Move> generate_capture_moves();
     int get_evaluation();
+
+    // New optimization helpers
+    bool is_legal_move_fast(const Move& move, int king_square, bool in_check, 
+                           int num_checkers, uint64_t checkers, uint64_t pinned_pieces);
+    uint64_t get_checkers(bool white_king) const;
+    uint64_t get_pinned_pieces(bool white_king) const;
+    bool is_king_move_safe(int to_square);  // Remove const - needs to modify state temporarily
+    bool is_king_capture_safe(int to_square);  // New function for king captures
+    bool is_move_along_pin_ray(int from_sq, int to_sq, int king_square) const;
+    bool is_sliding_check(int checker_square, int king_square) const;
+    uint64_t get_squares_between(int sq1, int sq2) const;
+    bool are_aligned_rank_or_file(int sq1, int sq2) const;
+    bool are_aligned_diagonal(int sq1, int sq2) const;
+    int get_piece_value(int piece) const;
+    uint32_t get_piece_at_square(int row, int col) const;  // Helper to get piece from bitboards
+    int evaluate_development() const;  // New function for development evaluation
+    int count_developed_pieces(bool white) const;  // Helper to count developed pieces
+    //bool is_square_attacked_by_enemy_manual(int square, bool by_white, uint64_t modified_occupancy) const;
+    uint64_t get_rook_attacks_manual(int square, uint64_t blockers) const;
+    uint64_t get_bishop_attacks_manual(int square, uint64_t blockers) const;
 
     // New helpers
     std::pair<Move, int> get_best_move(int depth);
@@ -216,6 +250,12 @@ public:
     std::pair<uint32_t, uint32_t> get_piece_at(int row, int col);
     void print_board();
     int performance_test(int depth);
+    
+    // Utility API functions for WASM interface
+    bool is_white_to_move() const;
+    bool is_checkmate() const;
+    bool is_stalemate() const;
+    bool is_game_over() const;
 
     // Public helpers used by UI / WASM
     int evaluate_position() const;
@@ -240,10 +280,6 @@ public:
     void undo_move(const Move& move, const MoveUndo& undo_info);
 
     std::vector<std::vector<uint32_t>> get_board_state() const;
-    bool is_white_to_move() const;
-    bool is_game_over() const;
-    bool is_checkmate() const;
-    bool is_stalemate() const;
 
     // Debug/testing
     void print_bitboards() const;
@@ -260,4 +296,3 @@ public:
 
 // Initialize the engine tables (call once from .cpp or from main)
 void init_chess_engine__tables();
-
