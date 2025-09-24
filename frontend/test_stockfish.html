@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Stockfish Engine</title>
+</head>
+<body>
+    <h1>Stockfish Engine Test</h1>
+    <div id="status">Initializing...</div>
+    <div id="output"></div>
+    
+    <script>
+        // Create a test chess board (initial position)
+        const testBoard = [
+            [
+                { type: 'rook', color: 'black', abilities: ['rook'] },
+                { type: 'knight', color: 'black', abilities: ['knight'] },
+                { type: 'bishop', color: 'black', abilities: ['bishop'] },
+                { type: 'queen', color: 'black', abilities: ['queen'] },
+                { type: 'king', color: 'black', abilities: ['king'] },
+                { type: 'bishop', color: 'black', abilities: ['bishop'] },
+                { type: 'knight', color: 'black', abilities: ['knight'] },
+                { type: 'rook', color: 'black', abilities: ['rook'] }
+            ],
+            Array(8).fill(null).map(() => ({ type: 'pawn', color: 'black', abilities: ['pawn'] })),
+            Array(8).fill(null),
+            Array(8).fill(null),
+            Array(8).fill(null),
+            Array(8).fill(null),
+            Array(8).fill(null).map(() => ({ type: 'pawn', color: 'white', abilities: ['pawn'] })),
+            [
+                { type: 'rook', color: 'white', abilities: ['rook'] },
+                { type: 'knight', color: 'white', abilities: ['knight'] },
+                { type: 'bishop', color: 'white', abilities: ['bishop'] },
+                { type: 'queen', color: 'white', abilities: ['queen'] },
+                { type: 'king', color: 'white', abilities: ['king'] },
+                { type: 'bishop', color: 'white', abilities: ['bishop'] },
+                { type: 'knight', color: 'white', abilities: ['knight'] },
+                { type: 'rook', color: 'white', abilities: ['rook'] }
+            ]
+        ];
+
+        const gameState = {
+            current_turn: 'white'
+        };
+
+        // Initialize the worker
+        const worker = new Worker('./engine/engine-worker.js');
+        
+        worker.onmessage = function(e) {
+            const { type, data, success, error } = e.data;
+            const output = document.getElementById('output');
+            const status = document.getElementById('status');
+            
+            console.log('Received message:', e.data);
+            
+            switch (type) {
+                case 'initialized':
+                    if (success) {
+                        status.textContent = 'Engine initialized successfully!';
+                        
+                        // Test finding best move
+                        worker.postMessage({
+                            type: 'findBestMove',
+                            id: 'test1',
+                            data: {
+                                board: testBoard,
+                                gameState: gameState,
+                                depth: 3
+                            }
+                        });
+                    } else {
+                        status.textContent = 'Engine initialization failed: ' + error;
+                    }
+                    break;
+                    
+                case 'bestMove':
+                    output.innerHTML += '<div><strong>Best Move:</strong> ' + JSON.stringify(data) + '</div>';
+                    
+                    // Test getting legal moves
+                    worker.postMessage({
+                        type: 'getLegalMoves',
+                        id: 'test2',
+                        data: {
+                            board: testBoard,
+                            gameState: gameState
+                        }
+                    });
+                    break;
+                    
+                case 'legalMoves':
+                    const moveCount = Object.keys(data).reduce((count, key) => count + data[key].length, 0);
+                    output.innerHTML += '<div><strong>Legal Moves Count:</strong> ' + moveCount + '</div>';
+                    output.innerHTML += '<div><strong>Legal Moves Sample:</strong> ' + JSON.stringify(Object.keys(data).slice(0, 3)) + '</div>';
+                    break;
+                    
+                case 'error':
+                    output.innerHTML += '<div style="color: red;"><strong>Error:</strong> ' + error + '</div>';
+                    break;
+            }
+        };
+        
+        // Start initialization
+        worker.postMessage({ type: 'initialize' });
+    </script>
+</body>
+</html>

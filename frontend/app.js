@@ -2201,17 +2201,17 @@ class ChessApp {
         }
 
         try {
-            // console.log('📤 [DEBUG] Calling engine.getLegalMoves...');
+            // console.log('\ud83d\udce4 [DEBUG] Calling engine.getLegalMoves...');
             const legalMoves = await this.bot.engine.getLegalMoves(
                 this.gameState.board, 
                 this.gameState
             );
 
-            // console.log('🔍 [DEBUG] Legal moves from engine:', legalMoves);
+            console.log('[DEBUG] Legal moves received from worker:', legalMoves);
 
             // Convert to the format expected by the UI
             this.allValidMoves = new Map();
-            
+
             for (const [position, moves] of Object.entries(legalMoves)) {
                 this.allValidMoves.set(position, moves.map(move => ({
                     row: move[0],
@@ -2219,7 +2219,7 @@ class ChessApp {
                 })));
             }
 
-            // console.log('🔍 Updated valid moves for bot game:', this.allValidMoves);
+            console.log('[DEBUG] Processed allValidMoves:', this.allValidMoves);
         } catch (error) {
             console.error('Error updating bot game valid moves:', error);
         }

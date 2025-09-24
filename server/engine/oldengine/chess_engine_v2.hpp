@@ -135,6 +135,7 @@ private:
     mutable int cached_king_safety_eval;
     mutable int cached_mobility_eval;
     mutable bool eval_cache_valid;
+    mutable int cached_psqt_eval;
     
     static constexpr int PIECE_VALUES[7] = {0, 100, 320, 330, 500, 900, 20000};
     
@@ -260,7 +261,6 @@ public:
     // Public helpers used by UI / WASM
     int evaluate_position() const;
     bool is_in_check(bool white_king) const;
-
     // Legacy compatibility apply/undo
     struct MoveUndo {
         uint32_t captured_piece;

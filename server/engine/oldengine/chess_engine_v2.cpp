@@ -37,6 +37,47 @@ int ChessEngine::bishop_shifts[64] = {
     5, 5, 7, 7, 7, 7, 5, 5,
     6, 5, 5, 5, 5, 5, 5, 6
 };
+
+static const int PAWN_PST[64] = {
+     0,  0,   0,  0,   0,  0,  0,  0,
+    50, 50,  50, 50,  50, 50, 50, 50,
+    10, 10,  20, 30,  30, 20, 10, 10,
+     5,  5,  10, 25,  25, 10,  5,  5,
+     0,  0,   0, 20,  20,  0,  0,  0,
+     5, -5, -10,  0,   0,-10, -5,  5,
+     5, 10,  10,-20, -20, 10, 10,  5,
+     0,  0,   0,  0,   0,  0,  0,  0
+};
+static const int KNIGHT_PST[64] = {
+   -50,-40,-30,-30,-30,-30,-40,-50,
+   -40,-20,  0,  0,  0,  0,-20,-40,
+   -30,  0, 10, 15, 15, 10,  0,-30,
+   -30,  5, 15, 20, 20, 15,  5,-30,
+   -30,  0, 15, 20, 20, 15,  0,-30,
+   -30,  5, 10, 15, 15, 10,  5,-30,
+   -40,-20,  0,  5,  5,  0,-20,-40,
+   -50,-40,-30,-30,-30,-30,-40,-50
+};
+static const int BISHOP_PST[64] = {
+   -20,-10,-10,-10,-10,-10,-10,-20,
+   -10,  0,  0,  0,  0,  0,  0,-10,
+   -10,  0,  5, 10, 10,  5,  0,-10,
+   -10,  5,  5, 10, 10,  5,  5,-10,
+   -10,  0, 10, 10, 10, 10,  0,-10,
+   -10, 10, 10, 10, 10, 10, 10,-10,
+   -10,  5,  0,  0,  0,  0,  5,-10,
+   -20,-10,-10,-10,-10,-10,-10,-20
+};
+static const int QUEEN_PST[64] = {
+   -20,-10,-10, -5, -5,-10,-10,-20,
+   -10,  0,  0,  0,  0,  0,  0,-10,
+   -10,  0,  5,  5,  5,  5,  0,-10,
+    -5,  0,  5,  5,  5,  5,  0, -5,
+     0,  0,  5,  5,  5,  5,  0, -5,
+   -10,  5,  5,  5,  5,  5,  0,-10,
+   -10,  0,  5,  0,  0,  0,  0,-10,
+   -20,-10,-10, -5, -5,-10,-10,-20
+};
 bool ChessEngine::tables_initialized = false;
 MagicTable ChessEngine::rook_table;
 MagicTable ChessEngine::bishop_table;
@@ -387,8 +428,6 @@ void ChessEngine::add_pawn_moves(int from_square, uint64_t targets, bool white, 
         if (to_row == promotion_rank) {
             moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 4); // promote to queen
             moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 5); // promote to rook
-            moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 4); // promote to queen
-            moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 5); // promote to rook
             moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 6); // promote to bishop
             moves.emplace_back(row_of(from_square), col_of(from_square), to_row, col_of(to), 7); // promote to knight
         } else {
@@ -400,14 +439,13 @@ void ChessEngine::add_pawn_moves(int from_square, uint64_t targets, bool white, 
 // ========== MOVE GENERATION ==========
 void ChessEngine::generate_pawn_moves_bb(bool white, std::vector<Move>& moves) const {
     int color = white ? 0 : 1;
-    uint64_t pawns = piece_bb[color][0];
     int dir = white ? -1 : 1;
     int start_rank = white ? 6 : 1;
     
-    // normal pawns
-    while (pawns) {
-        int from_sq = bitscan_forward(pawns);
-        pawns = clear_lsb(pawns);
+    uint64_t ability_pawns = ability_bb[color][0];
+    while (ability_pawns) {
+        int from_sq = bitscan_forward(ability_pawns);
+        ability_pawns = clear_lsb(ability_pawns);
         int fr = row_of(from_sq), fc = col_of(from_sq);
         
         // single push
@@ -418,7 +456,7 @@ void ChessEngine::generate_pawn_moves_bb(bool white, std::vector<Move>& moves) c
                 add_pawn_moves(from_sq, single, white, moves);
                 
                 // double push
-                if (fr == start_rank) {
+                if (fr == start_rank && piece_bb[color][0] & square_bb(fr, fc)) {
                     int dtr = tr + dir;
                     if (dtr >= 0 && dtr < 8) {
                         uint64_t dbl = square_bb(dtr, fc);
@@ -440,33 +478,18 @@ void ChessEngine::generate_pawn_moves_bb(bool white, std::vector<Move>& moves) c
         }
     }
     
-    // absorbed-pawn ability pieces: captures + en-passant, no forward pushes (unless the piece is actually a pawn too)
-    uint64_t ability_pawns = ability_bb[color][0];
-    while (ability_pawns) {
-        int from_sq = bitscan_forward(ability_pawns);
-        ability_pawns = clear_lsb(ability_pawns);
-        if (!(occupancy_all & square_bb(from_sq))) continue;
-        uint64_t attacks = pawn_attacks[color][from_sq];
-        uint64_t caps = attacks & (white ? occupancy_black : occupancy_white);
-        add_pawn_moves(from_sq, caps, white, moves);
-        if (en_passant_col >= 0 && en_passant_row >= 0) {
-            if (attacks & square_bb(en_passant_row, en_passant_col)) {
-                moves.emplace_back(row_of(from_sq), col_of(from_sq), en_passant_row, en_passant_col, 1);
-            }
-        }
-    }
 }
 
 void ChessEngine::generate_knight_moves_bb(bool white, std::vector<Move>& moves) const {
     int color = white ? 0 : 1;
-    uint64_t knights = piece_bb[color][1];
-    while (knights) {
-        int from = bitscan_forward(knights);
-        knights = clear_lsb(knights);
-        uint64_t atk = knight_attacks[from];
-        uint64_t targets = atk & ~(white ? occupancy_white : occupancy_black);
-        add_moves_from_bitboard(from, targets, moves);
-    }
+    // uint64_t knights = piece_bb[color][1];
+    // while (knights) {
+    //     int from = bitscan_forward(knights);
+    //     knights = clear_lsb(knights);
+    //     uint64_t atk = knight_attacks[from];
+    //     uint64_t targets = atk & ~(white ? occupancy_white : occupancy_black);
+    //     add_moves_from_bitboard(from, targets, moves);
+    // }
     uint64_t ab_knights = ability_bb[color][1];
     while (ab_knights) {
         int from = bitscan_forward(ab_knights);
@@ -480,16 +503,16 @@ void ChessEngine::generate_knight_moves_bb(bool white, std::vector<Move>& moves)
 
 void ChessEngine::generate_bishop_moves_bb(bool white, std::vector<Move>& moves) const {
     int color = white ? 0 : 1;
-    uint64_t bishops = piece_bb[color][2];
-    while (bishops) {
-        int from = bitscan_forward(bishops);
-        bishops = clear_lsb(bishops);
-        uint64_t atk = get_bishop_attacks(from, occupancy_all);
-        uint64_t targets = atk & ~(white ? occupancy_white : occupancy_black);
-        //std::cerr << "[DEBUG][BISHOP] from sq=" << from << " (row=" << row_of(from) << ",col=" << col_of(from) << ")\n";
-        //std::cerr << "  occupancy_all=0x" << std::hex << occupancy_all << ", atk=0x" << atk << ", targets=0x" << targets << std::dec << std::endl;
-        add_moves_from_bitboard(from, targets, moves);
-    }
+    // uint64_t bishops = piece_bb[color][2];
+    // while (bishops) {
+    //     int from = bitscan_forward(bishops);
+    //     bishops = clear_lsb(bishops);
+    //     uint64_t atk = get_bishop_attacks(from, occupancy_all);
+    //     uint64_t targets = atk & ~(white ? occupancy_white : occupancy_black);
+    //     //std::cerr << "[DEBUG][BISHOP] from sq=" << from << " (row=" << row_of(from) << ",col=" << col_of(from) << ")\n";
+    //     //std::cerr << "  occupancy_all=0x" << std::hex << occupancy_all << ", atk=0x" << atk << ", targets=0x" << targets << std::dec << std::endl;
+    //     add_moves_from_bitboard(from, targets, moves);
+    // }
     uint64_t ab_bishops = ability_bb[color][2];
     while (ab_bishops) {
         int from = bitscan_forward(ab_bishops);
@@ -504,16 +527,16 @@ void ChessEngine::generate_bishop_moves_bb(bool white, std::vector<Move>& moves)
 
 void ChessEngine::generate_rook_moves_bb(bool white, std::vector<Move>& moves) const {
     int color = white ? 0 : 1;
-    uint64_t rooks = piece_bb[color][3];
-    while (rooks) {
-        int from = bitscan_forward(rooks);
-        rooks = clear_lsb(rooks);
-        uint64_t atk = get_rook_attacks(from, occupancy_all);
-        uint64_t targets = atk & ~(white ? occupancy_white : occupancy_black);
-        //std::cerr << "[DEBUG][ROOK] from sq=" << from << " (row=" << row_of(from) << ",col=" << col_of(from) << ")\n";
-        //std::cerr << "  occupancy_all=0x" << std::hex << occupancy_all << ", atk=0x" << atk << ", targets=0x" << targets << std::dec << std::endl;
-        add_moves_from_bitboard(from, targets, moves);
-    }
+    // uint64_t rooks = piece_bb[color][3];
+    // while (rooks) {
+    //     int from = bitscan_forward(rooks);
+    //     rooks = clear_lsb(rooks);
+    //     uint64_t atk = get_rook_attacks(from, occupancy_all);
+    //     uint64_t targets = atk & ~(white ? occupancy_white : occupancy_black);
+    //     //std::cerr << "[DEBUG][ROOK] from sq=" << from << " (row=" << row_of(from) << ",col=" << col_of(from) << ")\n";
+    //     //std::cerr << "  occupancy_all=0x" << std::hex << occupancy_all << ", atk=0x" << atk << ", targets=0x" << targets << std::dec << std::endl;
+    //     add_moves_from_bitboard(from, targets, moves);
+    // }
     uint64_t ab_rooks = ability_bb[color][3];
     while (ab_rooks) {
         int from = bitscan_forward(ab_rooks);
@@ -527,14 +550,14 @@ void ChessEngine::generate_rook_moves_bb(bool white, std::vector<Move>& moves) c
 
 void ChessEngine::generate_queen_moves_bb(bool white, std::vector<Move>& moves) const {
     int color = white ? 0 : 1;
-    uint64_t queens = piece_bb[color][4];
-    while (queens) {
-        int from = bitscan_forward(queens);
-        queens = clear_lsb(queens);
-        uint64_t atk = get_queen_attacks(from, occupancy_all);
-        uint64_t targets = atk & ~(white ? occupancy_white : occupancy_black);
-        add_moves_from_bitboard(from, targets, moves);
-    }
+    // uint64_t queens = piece_bb[color][4];
+    // while (queens) {
+    //     int from = bitscan_forward(queens);
+    //     queens = clear_lsb(queens);
+    //     uint64_t atk = get_queen_attacks(from, occupancy_all);
+    //     uint64_t targets = atk & ~(white ? occupancy_white : occupancy_black);
+    //     add_moves_from_bitboard(from, targets, moves);
+    // }
     uint64_t ab_queens = ability_bb[color][4];
     while (ab_queens) {
         int from = bitscan_forward(ab_queens);
@@ -556,15 +579,15 @@ void ChessEngine::generate_king_moves_bb(bool white, std::vector<Move>& moves) c
         uint64_t targets = atk & ~(white ? occupancy_white : occupancy_black);
         add_moves_from_bitboard(from, targets, moves);
     }
-    uint64_t ab_kings = ability_bb[color][5];
-    while (ab_kings) {
-        int from = bitscan_forward(ab_kings);
-        ab_kings = clear_lsb(ab_kings);
-        if (!(occupancy_all & square_bb(from))) continue;
-        uint64_t atk = king_attacks[from];
-        uint64_t targets = atk & ~(white ? occupancy_white : occupancy_black);
-        add_moves_from_bitboard(from, targets, moves);
-    }
+    // uint64_t ab_kings = ability_bb[color][5];
+    // while (ab_kings) {
+    //     int from = bitscan_forward(ab_kings);
+    //     ab_kings = clear_lsb(ab_kings);
+    //     if (!(occupancy_all & square_bb(from))) continue;
+    //     uint64_t atk = king_attacks[from];
+    //     uint64_t targets = atk & ~(white ? occupancy_white : occupancy_black);
+    //     add_moves_from_bitboard(from, targets, moves);
+    // }
     // Castling handled separately
     generate_castling_moves_bb(white, moves);
 }
@@ -1117,64 +1140,39 @@ uint32_t ChessEngine::get_piece_at_square(int row, int col) const {
 }
 
 // ========== EVALUATION HELPERS ==========
-
 int ChessEngine::calculate_piece_ability_value(uint32_t piece, uint32_t abilities) const {
-    if (piece == 0) return 0;
-    int total_value = 0;
-    bool has_rook_ability = false;
-    bool has_bishop_ability = false;
-    bool has_queen_ability = false;
-    
-    // Check what abilities this piece has
-    if ((piece & PIECE_ROOK) || (abilities & ABILITY_ROOK)) has_rook_ability = true;
-    if ((piece & PIECE_BISHOP) || (abilities & ABILITY_BISHOP)) has_bishop_ability = true;
-    if ((piece & PIECE_QUEEN) || (abilities & ABILITY_QUEEN)) has_queen_ability = true;
-    
-    // Base piece value (primary type)
-    if (piece & PIECE_PAWN) total_value += 100;
-    else if (piece & PIECE_KNIGHT) total_value += 300;
-    else if (piece & PIECE_BISHOP) total_value += 300;
-    else if (piece & PIECE_ROOK) total_value += 500;
-    else if (piece & PIECE_QUEEN) total_value += 900;
-    else if (piece & PIECE_KING) total_value += 10000;
-    
-    // Add unique ability values (avoid duplicates)
-    if (has_queen_ability) {
-        // Queen already includes rook and bishop, so add queen value only
-        if (!(piece & PIECE_QUEEN)) {
-            total_value += 900; // Bonus for gaining queen ability
-            if ((abilities & ABILITY_ROOK)) {
-                total_value -= 500;
-            }
-            if ((abilities & ABILITY_BISHOP)) {
-                total_value -= 300;
-            }
-        }
+    bool hasR = (piece&PIECE_ROOK) || (abilities&ABILITY_ROOK);
+    bool hasB = (piece&PIECE_BISHOP) || (abilities&ABILITY_BISHOP);
+    bool hasQ = (piece&PIECE_QUEEN)|| (abilities&ABILITY_QUEEN);
+    int total = 0;
+    // Composite logic: Rook+Bishop = Queen
+    if ((hasR && hasB) || hasQ) {
+        total += 900;
+        // Subtract the rook/bishop sub-values if they were added by base piece
+        if (abilities & ABILITY_ROOK)  total -= 500;
+        if (abilities & ABILITY_BISHOP) total -= 300;
+        // The code below then adds *other* abilities (knight, pawn) normally
     } else {
-        // Add individual abilities if no queen ability
-        if (has_rook_ability && !(piece & PIECE_ROOK) && !(abilities & ABILITY_QUEEN)) {
-            total_value += 500;
-        }
-        if (has_bishop_ability && !(piece & PIECE_BISHOP) && !(abilities & ABILITY_QUEEN)) {
-            total_value += 300;
-        }
+        // Base piece value
+        if      (piece & PIECE_PAWN)   total += 100;
+        else if (piece & PIECE_KNIGHT) total += 300;
+        else if (piece & PIECE_BISHOP) total += 300;
+        else if (piece & PIECE_ROOK)   total += 500;
+        else if (piece & PIECE_KING)   total += 10000;
+        // Add any single R/B ability if queen-case not triggered
+        if (hasR && !(piece&PIECE_ROOK)) total += 500;
+        if (hasB && !(piece&PIECE_BISHOP)) total += 300;
     }
-    
-    // Other abilities
-    if (abilities & ABILITY_KNIGHT && !(piece & PIECE_KNIGHT)) {
-        total_value += 300;
+    // Add remaining abilities (knight, pawn, king) as before...
+    if (abilities & ABILITY_KNIGHT && !(piece&PIECE_KNIGHT)) total += 300;
+    if (abilities & ABILITY_PAWN && !(piece&PIECE_PAWN)) {
+        // Pawn ability is often minimal: heavy pieces get only +10
+        if (hasQ || (hasR && hasB)) total += 10;
+        else total += 100;
     }
-    if (abilities & ABILITY_PAWN && !(piece & PIECE_PAWN)) {
-        if (abilities & (ABILITY_QUEEN) || (has_bishop_ability && has_rook_ability)) {
-            total_value += 10;
-        } else {
-            total_value += 100;
-        }
-    }
-    return total_value;
+    if (abilities & ABILITY_KING && !(piece&PIECE_KING)) total += 10000;
+    return total;
 }
-
-
 int ChessEngine::calculate_piece_ability_value_bb(int square, bool white) const {
     int color = white ? 0 : 1;
     uint64_t sq_bb = square_bb(square);
@@ -1349,12 +1347,33 @@ int ChessEngine::evaluate_king_safety_bb() const {
 
 int ChessEngine::evaluate_position() const {
     if (!eval_cache_valid) {
-        cached_material_eval = evaluate_material_bb();
-        cached_mobility_eval = evaluate_mobility_bb();
+        // Material + mobility + basic safety (as above)
+        cached_material_eval  = evaluate_material_bb();
+        cached_mobility_eval  = evaluate_mobility_bb();
         cached_king_safety_eval = evaluate_king_safety_bb();
+        // Add PSQT contributions:
+        int pst_score = 0;
+        for (int color = 0; color < 2; ++color) {
+            bool isWhite = (color == 0);
+            for (int pt = 0; pt < 6; ++pt) {
+                uint64_t bb = piece_bb[color][pt];
+                while (bb) {
+                    int sq = bitscan_forward(bb);
+                    bb = clear_lsb(bb);
+                    int val = 0;
+                    if      (pt == 0) val = PAWN_PST[sq];
+                    else if (pt == 1) val = KNIGHT_PST[sq];
+                    else if (pt == 2) val = BISHOP_PST[sq];
+                    else if (pt == 4) val = QUEEN_PST[sq];
+                    pst_score += (isWhite ? val : -val);
+                }
+            }
+        }
+        cached_psqt_eval = pst_score;
         eval_cache_valid = true;
     }
-    return cached_material_eval + cached_mobility_eval + cached_king_safety_eval;
+    return cached_material_eval + cached_mobility_eval 
+           + cached_king_safety_eval + cached_psqt_eval;
 }
 
 int ChessEngine::get_evaluation() {
@@ -1364,8 +1383,8 @@ int ChessEngine::get_evaluation() {
 // ========== MOVE APPLICATION (bitboard) ==========
 ChessEngine::MoveUndoBB ChessEngine::apply_move_bb(const Move& move) {
     MoveUndoBB undo;
-    
-    // Save everything required to undo
+
+    // Save entire state required to undo (keeps your undo struct semantics)
     for (int color = 0; color < 2; ++color) {
         for (int p = 0; p < 6; ++p) {
             undo.captured_piece_bb[color][p] = piece_bb[color][p];
@@ -1381,113 +1400,257 @@ ChessEngine::MoveUndoBB ChessEngine::apply_move_bb(const Move& move) {
     undo.old_material_eval = cached_material_eval;
     undo.old_king_safety_eval = cached_king_safety_eval;
     undo.old_mobility_eval = cached_mobility_eval;
-    
-    // Basic move application
+
+    // Local helpers/constants: piece indices 0..5 -> pawn, knight, bishop, rook, queen, king
+    constexpr int IDX_PAWN   = 0;
+    constexpr int IDX_KNIGHT = 1;
+    constexpr int IDX_BISHOP = 2;
+    constexpr int IDX_ROOK   = 3;
+    constexpr int IDX_QUEEN  = 4;
+    constexpr int IDX_KING   = 5;
+
     int from_sq = square(move.from_row, move.from_col);
-    int to_sq = square(move.to_row, move.to_col);
+    int to_sq   = square(move.to_row,   move.to_col);
     uint64_t from_bb = square_bb(from_sq);
-    uint64_t to_bb = square_bb(to_sq);
+    uint64_t to_bb   = square_bb(to_sq);
+
     int color = white_to_move ? 0 : 1;
     int enemy = 1 - color;
-    
-    // Find moving piece type (first match)
+
+    // --- Identify moving piece type (first matching bitboard) ---
     int moving_pt = -1;
     for (int pt = 0; pt < 6; ++pt) {
-        if (piece_bb[color][pt] & from_bb) { moving_pt = pt; break; }
+        if (undo.captured_piece_bb[color][pt] & from_bb) { moving_pt = pt; break; }
     }
-    // If nothing found, treat it as invalid (but we'll try to proceed)
-    if (moving_pt >= 0) {
-        piece_bb[color][moving_pt] &= ~from_bb;
-        piece_bb[color][moving_pt] |= to_bb;
+
+    // If no piece found on from square -> likely illegal, but try to proceed safely
+    if (moving_pt == -1) {
+        // nothing to move: return undo that restores whole board (we saved it)
+        return undo;
     }
-    
-    // Handle captures on destination
+
+    // --- Clear from square from moving piece's bitboard ---
+    piece_bb[color][moving_pt] &= ~from_bb;
+
+    // --- Handle captures (normal capture on destination) ---
+    bool normal_capture = false;
+    int captured_pt = -1;
     for (int pt = 0; pt < 6; ++pt) {
-        if (piece_bb[enemy][pt] & to_bb) {
-            piece_bb[enemy][pt] &= ~to_bb;
+        if (undo.captured_piece_bb[enemy][pt] & to_bb) {
+            normal_capture = true;
+            captured_pt = pt;
+            piece_bb[enemy][pt] &= ~to_bb; // remove captured piece
+            // transfer captured abilities will be handled below
             break;
         }
     }
-    
-    // Move abilities from source to dest (if present)
-    for (int at = 0; at < 6; ++at) {
-        if (ability_bb[color][at] & from_bb) {
-            ability_bb[color][at] &= ~from_bb;
-            ability_bb[color][at] |= to_bb;
+
+    // --- Handle en-passant capture (destination square empty but ep target present) ---
+    bool ep_capture = false;
+    if (!normal_capture) {
+        // en_passant_row/col indicate where an en-passant capture is possible (as per your state)
+        if (move.flags == /* you may have a dedicated EP flag; but if not, detect pawn move landing on enpassant */ 0) {
+            // If your engine uses explicit EP flag, handle here. Fallback detection:
         }
-        // Remove enemy abilities captured on destination
-        ability_bb[enemy][at] &= ~to_bb;
-    }
-    
-    // Set has_moved for moved piece
-    has_moved_bb[color] |= to_bb;
-    
-    // Handle special flags
-    if (move.flags == 1) {
-        // En passant: remove the pawn that was bypassed
-        int captured_row = undo.old_en_passant_row;
-        int captured_col = undo.old_en_passant_col;
-        // If en passant coordinates are valid, remove pawn there
-        if (captured_row >= 0 && captured_col >= 0) {
-            int cap_sq = square(captured_row, captured_col);
-            uint64_t cap_bb = square_bb(cap_sq);
-            piece_bb[enemy][0] &= ~cap_bb;
-            for (int at = 0; at < 6; ++at) ability_bb[enemy][at] &= ~cap_bb;
-        } else {
-            // fallback: if the moving pawn moved diagonally and destination empty (ep), remove pawn behind
-            if (!(undo.captured_piece_bb[enemy][0] & to_bb)) {
-                int cap_r = move.from_row;
-                int cap_c = move.to_col;
-                int cap_sq = square(cap_r, cap_c);
+        // Fallback detection: moving a pawn to the en-passant target column/row and enemy pawn exists behind
+        if (moving_pt == IDX_PAWN && en_passant_col >= 0) {
+            if (move.to_col == en_passant_col && move.to_row == en_passant_row) {
+                // captured pawn is on the file and on the rank behind the to_row (depends on color)
+                int cap_row = white_to_move ? (move.to_row + 1) : (move.to_row - 1);
+                int cap_sq = square(cap_row, move.to_col);
                 uint64_t cap_bb = square_bb(cap_sq);
-                piece_bb[enemy][0] &= ~cap_bb;
-                for (int at = 0; at < 6; ++at) ability_bb[enemy][at] &= ~cap_bb;
+                // find which pt was on cap_bb for enemy
+                for (int pt = 0; pt < 6; ++pt) {
+                    if (undo.captured_piece_bb[enemy][pt] & cap_bb) {
+                        ep_capture = true;
+                        captured_pt = pt;
+                        piece_bb[enemy][pt] &= ~cap_bb; // remove captured pawn
+                        break;
+                    }
+                }
+                if (ep_capture) {
+                    // captured piece location is cap_bb, not to_bb
+                    // for ability transfer we will use that cap_bb
+                }
             }
-        }
-    } else if (move.flags == 2) {
-        // Kingside castle: rook moves from h-file to f-file
-        uint64_t rook_from = square_bb(move.from_row, 7);
-        uint64_t rook_to   = square_bb(move.from_row, 5);
-        piece_bb[color][3] &= ~rook_from;
-        piece_bb[color][3] |= rook_to;
-        has_moved_bb[color] |= rook_to;
-        if (white_to_move) white_king_castled = true; else black_king_castled = true;
-    } else if (move.flags == 3) {
-        // Queenside castle: rook moves from a-file to d-file
-        uint64_t rook_from = square_bb(move.from_row, 0);
-        uint64_t rook_to   = square_bb(move.from_row, 3);
-        piece_bb[color][3] &= ~rook_from;
-        piece_bb[color][3] |= rook_to;
-        has_moved_bb[color] |= rook_to;
-        if (white_to_move) white_king_castled = true; else black_king_castled = true;
-    } else if (move.flags >= 4 && move.flags <= 7) {
-        // Promotion: after the pawn has been moved to destination, replace it by promoted piece
-        // First remove pawn at destination
-        piece_bb[color][0] &= ~to_bb;
-        // Map flags: 4=queen,5=rook,6=bishop,7=knight
-        switch (move.flags) {
-            case 4: piece_bb[color][4] |= to_bb; break; // queen
-            case 5: piece_bb[color][3] |= to_bb; break; // rook
-            case 6: piece_bb[color][2] |= to_bb; break; // bishop
-            case 7: piece_bb[color][1] |= to_bb; break; // knight
-            default: break;
         }
     }
 
-    // Update en passant: if moved double pawn, set en passant target; else clear
-    en_passant_col = en_passant_row = -1;
-    if (moving_pt == 0 && abs(move.to_row - move.from_row) == 2) {
-        en_passant_col = move.to_col;
-        en_passant_row = (move.from_row + move.to_row) / 2;
+    // --- Place moving piece on destination (most cases) ---
+    uint64_t placed_bb = to_bb;
+    piece_bb[color][moving_pt] |= placed_bb;
+
+    // --- Transfer abilities: move moving piece abilities from from_bb -> to_bb first ---
+    for (int at = 0; at < 6; ++at) {
+        if (undo.captured_ability_bb[color][at] & from_bb) {
+            ability_bb[color][at] &= ~from_bb;    // clear from origin
+            ability_bb[color][at] |= placed_bb;   // set on destination
+        }
+        // remove enemy abilities on destination (we'll then absorb them)
+        ability_bb[enemy][at] &= ~to_bb;
     }
-    
-    // Toggle side
+
+    // --- Absorb abilities from captured piece(s) onto capturing piece ---
+    if (normal_capture || ep_capture) {
+        // Always give only the base type ability of the captured piece
+        switch (captured_pt) {
+            case IDX_PAWN:   ability_bb[color][IDX_PAWN]   |= placed_bb; break;
+            case IDX_KNIGHT: ability_bb[color][IDX_KNIGHT] |= placed_bb; break;
+            case IDX_BISHOP: ability_bb[color][IDX_BISHOP] |= placed_bb; break;
+            case IDX_ROOK:   ability_bb[color][IDX_ROOK]   |= placed_bb; break;
+            case IDX_QUEEN:  ability_bb[color][IDX_QUEEN]  |= placed_bb; break;
+            case IDX_KING:   ability_bb[color][IDX_KING]   |= placed_bb; break;
+        }
+    }
+
+
+    // --- Compute captured material value and update cached_material_eval incrementally ---
+    // Use moving_side to avoid bug with white_to_move flip at end
+    int moving_side = color; // 0=white, 1=black
+    if (normal_capture || ep_capture) {
+        uint32_t caps = 0;
+        uint64_t cap_loc_bb = normal_capture ? to_bb : square_bb(moving_side == 0 ? (move.to_row+1) : (move.to_row-1));
+        for (int at = 0; at < 6; ++at) {
+            if (undo.captured_ability_bb[enemy][at] & cap_loc_bb) {
+                switch (at) {
+                    case 0: caps |= ABILITY_PAWN; break;
+                    case 1: caps |= ABILITY_KNIGHT; break;
+                    case 2: caps |= ABILITY_BISHOP; break;
+                    case 3: caps |= ABILITY_ROOK; break;
+                    case 4: caps |= ABILITY_QUEEN; break;
+                    case 5: caps |= ABILITY_KING; break;
+                }
+            }
+        }
+        uint32_t piece_mask = (1u << captured_pt);
+        int captured_value = calculate_piece_ability_value(piece_mask, caps);
+        // Material eval is stored from White's perspective; white capturing is good (+), black capturing is bad (-)
+        if (moving_side == 0) cached_material_eval += captured_value;
+        else                  cached_material_eval -= captured_value;
+    }
+
+    // --- Handle promotions: (flags >=4 per your convention) ---
+    // Promotion must: remove pawn bit and add promoted piece bit; adjust cached_material_eval accordingly.
+    if (move.flags >= 4) {
+        int promo_index = -1;
+        if (move.flags == 4) promo_index = IDX_QUEEN;
+        else if (move.flags == 5) promo_index = IDX_ROOK;
+        else if (move.flags == 6) promo_index = IDX_BISHOP;
+        else if (move.flags == 7) promo_index = IDX_KNIGHT;
+
+        if (promo_index != -1) {
+            // Remove pawn from destination
+            piece_bb[color][IDX_PAWN] &= ~placed_bb;
+            // Add promoted piece
+            piece_bb[color][promo_index] |= placed_bb;
+
+            // Preserve absorbed abilities (including the base type from capture)
+            for (int at = 0; at < 6; ++at) {
+                if (ability_bb[color][at] & placed_bb) {
+                    ability_bb[color][at] |= placed_bb; // keep abilities as-is
+                }
+            }
+
+            // Material adjustment
+            int pawn_val = PIECE_VALUES[1];
+            int promo_val = (promo_index == IDX_QUEEN)  ? PIECE_VALUES[5] :
+                            (promo_index == IDX_ROOK)   ? PIECE_VALUES[4] :
+                            (promo_index == IDX_BISHOP) ? PIECE_VALUES[3] :
+                            (promo_index == IDX_KNIGHT) ? PIECE_VALUES[2] : 0;
+            int delta = promo_val - pawn_val;
+            if (moving_side == 0) cached_material_eval += delta;
+            else                  cached_material_eval -= delta;
+        }
+    }
+
+    // --- Handle castling: move rook accordingly and update castled flags and king safety eval ---
+    // Use your previous convention: flags == 2 or 3 for castling
+    if (move.flags == 2 || move.flags == 3) {
+        // Identify color and which side castled by king destination squares (or flags)
+        if (color == 0) { // white
+            white_king_castled = true;
+            cached_king_safety_eval += 50; // example bonus
+            // short castle (O-O): rook h1 -> f1
+            if (move.flags == 2) {
+                uint64_t rook_from = square_bb(7,7);
+                uint64_t rook_to   = square_bb(7,5);
+                piece_bb[0][IDX_ROOK] &= ~rook_from;
+                piece_bb[0][IDX_ROOK] |= rook_to;
+                // move any rook abilities
+                for (int at=0; at<6; ++at) {
+                    if (ability_bb[0][at] & rook_from) {
+                        ability_bb[0][at] &= ~rook_from;
+                        ability_bb[0][at] |= rook_to;
+                    }
+                }
+            } else { // long O-O-O: rook a1 -> d1
+                uint64_t rook_from = square_bb(7,0);
+                uint64_t rook_to   = square_bb(7,3);
+                piece_bb[0][IDX_ROOK] &= ~rook_from;
+                piece_bb[0][IDX_ROOK] |= rook_to;
+                for (int at=0; at<6; ++at) {
+                    if (ability_bb[0][at] & rook_from) {
+                        ability_bb[0][at] &= ~rook_from;
+                        ability_bb[0][at] |= rook_to;
+                    }
+                }
+            }
+        } else { // black
+            black_king_castled = true;
+            cached_king_safety_eval -= 50; // good for white is negative for black castling
+            if (move.flags == 2) { // black short? depends on your flags mapping; adjust if reversed
+                uint64_t rook_from = square_bb(0,7);
+                uint64_t rook_to   = square_bb(0,5);
+                piece_bb[1][IDX_ROOK] &= ~rook_from;
+                piece_bb[1][IDX_ROOK] |= rook_to;
+                for (int at=0; at<6; ++at) {
+                    if (ability_bb[1][at] & rook_from) {
+                        ability_bb[1][at] &= ~rook_from;
+                        ability_bb[1][at] |= rook_to;
+                    }
+                }
+            } else {
+                uint64_t rook_from = square_bb(0,0);
+                uint64_t rook_to   = square_bb(0,3);
+                piece_bb[1][IDX_ROOK] &= ~rook_from;
+                piece_bb[1][IDX_ROOK] |= rook_to;
+                for (int at=0; at<6; ++at) {
+                    if (ability_bb[1][at] & rook_from) {
+                        ability_bb[1][at] &= ~rook_from;
+                        ability_bb[1][at] |= rook_to;
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Mark moved piece as has_moved ---
+    has_moved_bb[color] |= placed_bb;
+
+    // --- Update en-passant info: if a pawn just moved two squares, set en-passant target ---
+    // assume initial pawn rows: white pawns from row 6 to 4 when double-move (0-based rows)
+    en_passant_col = -1;
+    en_passant_row = -1;
+    if (moving_pt == IDX_PAWN) {
+        // white double move from row 6 -> row 4
+        if (white_to_move && move.from_row == 6 && move.to_row == 4) {
+            en_passant_col = move.to_col;
+            en_passant_row = 5; // square behind pawn (where capturer must land)
+        }
+        // black double move from row 1 -> row 3
+        if (!white_to_move && move.from_row == 1 && move.to_row == 3) {
+            en_passant_col = move.to_col;
+            en_passant_row = 2;
+        }
+    }
+
+    // --- Finish: flip side to move, update occupancy, set eval cache valid ---
     white_to_move = !white_to_move;
-    
-    // Update occupancy and invalidate eval cache
     update_occupancy();
+    // Only set eval_cache_valid=true if ALL evals are updated incrementally (material, mobility, king safety, psqt)
+    // For now, only material is updated, so mark cache as invalid to force full recompute when needed
     eval_cache_valid = false;
-    
+
     return undo;
 }
 

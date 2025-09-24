@@ -132,17 +132,18 @@ class ChessEngine {
             await this.initialize();
         }
 
-        // console.log('📋 [ENGINE] Requesting legal moves from worker...');
-        
+        console.log('[DEBUG] Sending board to worker:', board);
+        console.log('[DEBUG] Sending gameState to worker:', gameState);
+
         try {
             const moves = await this._sendMessage('getLegalMoves', {
                 board, gameState
             });
-            
-            // console.log('✅ [ENGINE] Received legal moves from worker');
+
+            console.log('[DEBUG] Received legal moves from worker:', moves);
             return moves;
         } catch (error) {
-            console.error('❌ [ENGINE] Error getting legal moves:', error);
+            console.error('\u274c [ENGINE] Error getting legal moves:', error);
             return {};
         }
     }

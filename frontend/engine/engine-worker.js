@@ -1,5 +1,8 @@
 // Import the WASM engine
-importScripts('./chess_engine_v2.js');
+importScripts('./absorb_chess_stockfish.js');
+
+// Verify the module loaded correctly
+console.log('📦 [WORKER] Script imported. AbsorbChessEngine available:', typeof AbsorbChessEngine !== 'undefined');
 
 // console.log('🔧🔧🔧 ENGINE WORKER SCRIPT LOADED 🔧🔧🔧');
 
@@ -9,29 +12,85 @@ let isInitialized = false;
 // Initialize the engine
 async function initializeEngine() {
     try {
-        // console.log('🚀🚀 ENGINE WORKER INIT: Starting chess engine initialization 🚀🚀🚀');
+        console.log('🚀 [WORKER] Starting chess engine initialization...');
         
-        if (typeof ChessEngineV2Module === 'undefined') {
-            throw new Error('ChessEngineV2Module not available in worker');
+        // Check if the module is available
+        if (typeof AbsorbChessEngine === 'undefined') {
+            console.error('❌ [WORKER] AbsorbChessEngine module not loaded');
+            throw new Error('AbsorbChessEngine not available in worker');
         }
         
+        console.log('✅ [WORKER] AbsorbChessEngine module found, creating instance...');
+        
         // Configure WASM module with correct paths
-        const wasmModule = await ChessEngineV2Module({
+        const wasmModule = await AbsorbChessEngine({
             locateFile: function(path) {
+                console.log('🔍 [WORKER] Locating file:', path);
                 if (path.endsWith('.wasm')) {
                     return './' + path;  // WASM file is in the same directory as the worker
                 }
                 return path;
+            },
+            onRuntimeInitialized: function() {
+                console.log('✅ [WORKER] WASM runtime initialized');
+            },
+            print: function(text) {
+                console.log('📝 [WORKER] WASM:', text);
+            },
+            printErr: function(text) {
+                console.error('❌ [WORKER] WASM Error:', text);
             }
         });
-        engine = new wasmModule.WasmChessEngine();
         
+        console.log('✅ [WORKER] WASM module loaded, creating engine instance...');
+        
+        // Debug: Check what's available in the WASM module
+        console.log('🔍 [WORKER] WASM module keys:', Object.keys(wasmModule));
+        console.log('🔍 [WORKER] WasmChessEngine available:', typeof wasmModule.WasmChessEngine);
+        console.log('🔍 [WORKER] WasmChessEngine.length (constructor params):', wasmModule.WasmChessEngine.length);
+        console.log('🔍 [WORKER] WasmChessEngine.prototype:', Object.getOwnPropertyNames(wasmModule.WasmChessEngine.prototype || {}));
+        console.log('🔍 [WORKER] Checking for other engine classes...');
+        
+        // Check for alternative class names
+        const possibleEngineClasses = ['WasmChessEngine', 'ChessEngine', 'Engine', 'AbsorbChessEngine'];
+        for (const className of possibleEngineClasses) {
+            console.log(`🔍 [WORKER] ${className}:`, typeof wasmModule[className]);
+        }
+        
+        // Check if there are other functions we can call
+        console.log('🔍 [WORKER] _uci_command available:', typeof wasmModule._uci_command);
+        
+        // Always use the actual constructor
+        let engineInstance = null;
+        try {
+            console.log('⏳ [WORKER] Attempting: new WasmChessEngine()');
+            engineInstance = new wasmModule.WasmChessEngine();
+            console.log('✅ [WORKER] Success with new WasmChessEngine()');
+        } catch (err) {
+            console.error('❌ [WORKER] Error during WasmChessEngine construction:', err);
+            postMessage({ type: 'initialized', success: false, error: 'Engine constructor failed: ' + err.message });
+            throw err;
+        }
+        engine = engineInstance;
+        console.log('✅ [WORKER] Engine instance created');
+        // Optionally, call an initialize method if needed
+        if (engine.initialize) {
+            try {
+                console.log('⏳ [WORKER] Awaiting engine.initialize()...');
+                await engine.initialize();
+                console.log('✅ [WORKER] engine.initialize() completed');
+            } catch (err) {
+                console.error('❌ [WORKER] Error during engine.initialize():', err);
+                postMessage({ type: 'initialized', success: false, error: 'engine.initialize() failed: ' + err.message });
+                throw err;
+            }
+        }
         isInitialized = true;
-        // console.log('✅ [WORKER] Chess engine initialized successfully');
-        // console.log('ENGINE INIT: Chess engine ready');
+        console.log('✅ [WORKER] Chess engine initialized successfully');
         postMessage({ type: 'initialized', success: true });
     } catch (error) {
         console.error('❌ [WORKER] Engine initialization failed:', error);
+        console.error('❌ [WORKER] Error stack:', error.stack);
         postMessage({ type: 'initialized', success: false, error: error.message });
     }
 }
@@ -182,27 +241,41 @@ self.onmessage = async function(e) {
                     postMessage({ type: 'error', id, error: 'Engine not initialized' });
                     return;
                 }
-                
-                const setBoardSuccess2 = setBoardState(data.board, data.gameState);
+
+                console.log('[DEBUG] Received board in worker:', data.board);
+                console.log('[DEBUG] Received gameState in worker:', data.gameState);
+
+                // Normalize gameState keys
+                const normalizedGameState = { ...data.gameState };
+                delete normalizedGameState.currentTurn;
+                delete normalizedGameState.gameOver;
+
+                console.log('[DEBUG] Normalized gameState:', normalizedGameState);
+
+                const setBoardSuccess2 = setBoardState(data.board, normalizedGameState);
                 if (!setBoardSuccess2) {
                     postMessage({ type: 'error', id, error: 'Failed to set board state' });
                     return;
                 }
-                
+
                 const rawMoves = engine.getLegalMoves();
+                console.log('[DEBUG] Raw moves from engine:', rawMoves);
+
                 const convertedMoves = {};
-                
+
                 for (let i = 0; i < rawMoves.length; i++) {
                     const move = rawMoves[i];
                     const fromKey = move.from_row + ',' + move.from_col;
-                    
+
                     if (!convertedMoves[fromKey]) {
                         convertedMoves[fromKey] = [];
                     }
-                    
+
                     convertedMoves[fromKey].push([move.to_row, move.to_col]);
                 }
-                
+
+                console.log('[DEBUG] Converted moves for frontend:', convertedMoves);
+
                 postMessage({ type: 'legalMoves', id, data: convertedMoves });
                 break;
                 

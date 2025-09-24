@@ -7,7 +7,7 @@ from server.core.game import ChessGame
 from server.core.enums import Color, PieceType
 from server.core.state import GlobalState
 from server.core.models import BotPlayer
-from server.engine.engine import Engine
+from server.engine.oldengine.engine import Engine
 # Removed: from server.engine.bot_engine import get_bot_engine_manager  # Now using frontend bot
 #from server.networking.connection import ConnectionManager
 
