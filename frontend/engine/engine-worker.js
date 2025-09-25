@@ -225,12 +225,20 @@ self.onmessage = async function(e) {
                 
                 let move = null;
                 if (engineMove && engineMove.from_row !== undefined) {
-                    move = {
-                        from: [engineMove.from_row, engineMove.from_col],
-                        to: [engineMove.to_row, engineMove.to_col],
-                        flags: engineMove.flags || 0,
-                        evaluation: engineMove.evaluation || 0
-                    };
+                    const from = [engineMove.from_row, engineMove.from_col];
+                    const to = [engineMove.to_row, engineMove.to_col];
+                    const isInvalid = from[0] < 0 || from[1] < 0 || to[0] < 0 || to[1] < 0;
+                    if (!isInvalid) {
+                        move = {
+                            from,
+                            to,
+                            flags: engineMove.flags || 0,
+                            evaluation: engineMove.evaluation || 0
+                        };
+                    } else {
+                        console.warn('[WORKER] Ignoring invalid engine move (-1,-1).');
+                        move = null;
+                    }
                 }
                 
                 postMessage({ type: 'bestMove', id, data: move });
@@ -267,11 +275,26 @@ self.onmessage = async function(e) {
                     const move = rawMoves[i];
                     const fromKey = move.from_row + ',' + move.from_col;
 
+                    // Debug castling moves specifically
+                    if (move.from_row === 7 && move.from_col === 4 && (move.to_col === 2 || move.to_col === 6)) {
+                        console.log('[DEBUG] CASTLING MOVE DETECTED:', {
+                            from: [move.from_row, move.from_col],
+                            to: [move.to_row, move.to_col],
+                            flags: move.flags,
+                            flagsType: typeof move.flags,
+                            expectedCastling: 49152
+                        });
+                    }
+
                     if (!convertedMoves[fromKey]) {
                         convertedMoves[fromKey] = [];
                     }
 
-                    convertedMoves[fromKey].push([move.to_row, move.to_col]);
+                    // Preserve move flags from engine
+                    convertedMoves[fromKey].push({
+                        to: [move.to_row, move.to_col],
+                        flags: move.flags || 0
+                    });
                 }
 
                 console.log('[DEBUG] Converted moves for frontend:', convertedMoves);

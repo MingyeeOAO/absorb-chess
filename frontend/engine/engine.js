@@ -214,10 +214,10 @@ class ChessEngine {
  */
 
 /**
- * Apply a move to the board and handle absorption
+ * Apply a move to the board and handle absorption - Unified for player and bot moves
  */
 function applyMoveToBoard(board, move) {
-    console.log('🎯 [MOVE] Applying move manually:', move);
+    console.log('🎯 [MOVE] Applying move:', move);
     
     // Support both 'flag' and 'flags' for compatibility
     const { from, to } = move;
@@ -226,96 +226,201 @@ function applyMoveToBoard(board, move) {
     const toPiece = board[to[0]][to[1]];
     
     if (!fromPiece) {
-        console.error('❌ [MOVE] No piece at source position');
+        console.error('❌ [MOVE] No piece at source position:', from);
         return { success: false, capturedPiece: null };
     }
     
     // Create a deep copy of the piece to avoid modifying the original
     const movingPiece = JSON.parse(JSON.stringify(fromPiece));
-    movingPiece.has_moved = true; // Use consistent property name
+    movingPiece.has_moved = true;
     
-    // Handle special moves based on flags
+    // Define MoveType constants (matching C++ engine)
+    const MoveType = {
+        NORMAL: 0,
+        PROMOTION: 16384,   // 1 << 14
+        ENPASSANT: 32768,   // 2 << 14  
+        CASTLING: 49152     // 3 << 14
+    };
+
     let capturedPiece = null;
     
-    if (flags === 1) {
+    console.log('🎯 [MOVE] Processing move - from:', from, 'to:', to, 'flags:', flags);
+    
+    // Handle special moves based on flags
+    if (flags === MoveType.CASTLING) {
+        // CRITICAL FIX: Handle Stockfish-style castling moves
+        // Stockfish encodes castling as "king captures rook", but we need to convert
+        // this to proper king and rook positions
+        
+        console.log('🎯 [CASTLING] Processing castling move - piece type:', fromPiece.type);
+        
+        if (fromPiece.type === 'king') {
+            // The 'to' position is actually the rook's position in Stockfish encoding
+            const rookCol = to[1]; // Where the rook currently is
+            const kingRow = from[0];
+            
+            console.log('🎯 [CASTLING] King at:', from, 'attempting to castle with rook at col:', rookCol);
+            
+            // Determine castling type and final positions
+            let kingFinalCol, rookFinalCol;
+            
+            if (rookCol === 7) {
+                // Kingside castling - king goes to g-file (col 6), rook goes to f-file (col 5)
+                kingFinalCol = 6;
+                rookFinalCol = 5;
+                console.log('🎯 [CASTLING] Kingside castling detected');
+            } else if (rookCol === 0) {
+                // Queenside castling - king goes to c-file (col 2), rook goes to d-file (col 3)
+                kingFinalCol = 2;
+                rookFinalCol = 3;
+                console.log('🎯 [CASTLING] Queenside castling detected');
+            } else {
+                console.error('❌ [CASTLING] Invalid rook position for castling:', rookCol);
+                return { success: false, capturedPiece: null };
+            }
+            
+            // Get the rook
+            const rook = board[kingRow][rookCol];
+            if (!rook || rook.type !== 'rook' || rook.color !== fromPiece.color) {
+                console.error('❌ [CASTLING] No valid rook found at position:', kingRow, rookCol);
+                return { success: false, capturedPiece: null };
+            }
+            
+            // Move the king to its final position
+            board[kingRow][kingFinalCol] = movingPiece;
+            board[from[0]][from[1]] = null;
+            
+            // Move the rook to its final position
+            const rookCopy = JSON.parse(JSON.stringify(rook));
+            rookCopy.has_moved = true;
+            board[kingRow][rookFinalCol] = rookCopy;
+            board[kingRow][rookCol] = null;
+            
+            console.log('✅ [CASTLING] Completed - King moved to:', [kingRow, kingFinalCol], 'Rook moved to:', [kingRow, rookFinalCol]);
+            
+            return { success: true, capturedPiece: null };
+        } else {
+            console.error('❌ [CASTLING] Castling flag on non-king piece');
+            return { success: false, capturedPiece: null };
+        }
+    }
+    else if (flags === MoveType.ENPASSANT) {
         // En passant capture
         console.log('🎯 [SPECIAL] En passant capture');
-        // The captured pawn is not at the destination square, but adjacent to it
         const capturedRow = from[0]; // Same row as attacking pawn
         const capturedCol = to[1];   // Same column as destination
         capturedPiece = board[capturedRow][capturedCol];
         board[capturedRow][capturedCol] = null; // Remove the captured pawn
         console.log('💥 [EN PASSANT] Captured pawn at:', capturedRow, capturedCol);
-    } else if (flags === 2) {
-        // Kingside castling
-        console.log('🎯 [SPECIAL] Kingside castling');
-        const rookFromCol = 7;
-        const rookToCol = 5;
-        const rook = board[from[0]][rookFromCol];
-        if (rook) {
-            // Move the rook
-            board[from[0]][rookFromCol] = null;
-            const rookCopy = JSON.parse(JSON.stringify(rook));
-            rookCopy.has_moved = true;
-            board[from[0]][rookToCol] = rookCopy;
-            console.log('🏰 [CASTLING] Moved rook from', rookFromCol, 'to', rookToCol);
+    }
+    else if (flags === MoveType.PROMOTION || flags >= 4 && flags <= 7) {
+        // Promotion handling
+        console.log('🎯 [SPECIAL] Promotion detected, flags:', flags);
+        
+        let promotionType;
+        if (flags === MoveType.PROMOTION) {
+            // Use global promotionPiece or default to queen
+            promotionType = window.promotionPiece || 'queen';
+        } else {
+            // Legacy format
+            const promotionPieces = { 4: 'queen', 5: 'rook', 6: 'bishop', 7: 'knight' };
+            promotionType = promotionPieces[flags];
         }
-    } else if (flags === 3) {
-        // Queenside castling  
-        console.log('🎯 [SPECIAL] Queenside castling');
-        const rookFromCol = 0;
-        const rookToCol = 3;
-        const rook = board[from[0]][rookFromCol];
-        if (rook) {
-            // Move the rook
-            board[from[0]][rookFromCol] = null;
-            const rookCopy = JSON.parse(JSON.stringify(rook));
-            rookCopy.has_moved = true;
-            board[from[0]][rookToCol] = rookCopy;
-            console.log('🏰 [CASTLING] Moved rook from', rookFromCol, 'to', rookToCol);
+        
+        movingPiece.type = promotionType;
+        movingPiece.abilities = [promotionType]; // Reset abilities to just the promoted piece type
+        console.log('🎯 [PROMOTION] Pawn promoted to:', promotionType);
+        
+        // Handle capture if any
+        if (toPiece && toPiece.color !== movingPiece.color) {
+            capturedPiece = toPiece;
         }
-    } else if (flags >= 4 && flags <= 7) {
-        // Promotion
-        const promotionPieces = {
-            4: 'queen',
-            5: 'rook',
-            6: 'bishop', 
-            7: 'knight'
-        };
-        movingPiece.type = promotionPieces[flags];
-        movingPiece.abilities = movingPiece.abilities.filter(ability => ability !== 'pawn');
-        movingPiece.abilities.push(movingPiece.type); // Ensure promoted piece has its own ability
-        //console.log('🎯 [PROMOTION] Pawn promoted to:', movingPiece.type);
-    } else {
-        // Regular capture (if any)
+    }
+    else if (flags === 2 || flags === 3) {
+        // Legacy castling format
+        console.log('🎯 [SPECIAL] Legacy castling, flags:', flags);
+        
+        if (flags === 2) { // Kingside
+            const rookFromCol = 7, rookToCol = 5;
+            const rook = board[from[0]][rookFromCol];
+            if (rook) {
+                board[from[0]][rookFromCol] = null;
+                const rookCopy = JSON.parse(JSON.stringify(rook));
+                rookCopy.has_moved = true;
+                board[from[0]][rookToCol] = rookCopy;
+            }
+        } else { // Queenside
+            const rookFromCol = 0, rookToCol = 3;
+            const rook = board[from[0]][rookFromCol];
+            if (rook) {
+                board[from[0]][rookFromCol] = null;
+                const rookCopy = JSON.parse(JSON.stringify(rook));
+                rookCopy.has_moved = true;
+                board[from[0]][rookToCol] = rookCopy;
+            }
+        }
+    }
+    else {
+        // Normal move - handle capture if any
         if (toPiece && toPiece.color !== movingPiece.color) {
             capturedPiece = toPiece;
         }
     }
     
-    // Handle absorption if there's a capture (except for en passant which was handled above)
-    if (capturedPiece && capturedPiece.color !== movingPiece.color) {
-        //console.log('💥 [ABSORPTION] Capturing piece:', capturedPiece.type, 'with abilities:', capturedPiece.abilities);
-        
-        // ONLY add captured piece's BASE TYPE to abilities (not its inherited abilities)
-        if (!movingPiece.abilities) {
-            movingPiece.abilities = [movingPiece.type];
+    // For non-castling moves, apply the normal move
+    if (flags !== MoveType.CASTLING) {
+        // Handle absorption if there's a capture
+        if (capturedPiece && capturedPiece.color !== movingPiece.color) {
+            console.log('💥 [ABSORPTION] Capturing piece:', capturedPiece.type);
+            
+            // Add captured piece's base type to abilities
+            if (!movingPiece.abilities) {
+                movingPiece.abilities = [movingPiece.type];
+            }
+            if (!movingPiece.abilities.includes(capturedPiece.type)) {
+                movingPiece.abilities.push(capturedPiece.type);
+                console.log('✨ [ABSORPTION] Gained ability:', capturedPiece.type);
+            }
         }
-        if (!movingPiece.abilities.includes(capturedPiece.type)) {
-            movingPiece.abilities.push(capturedPiece.type);
-            //console.log('✨ [ABSORPTION] Gained ability:', capturedPiece.type, 'New abilities:', movingPiece.abilities);
-        } 
         
-        // NO LONGER inheriting all abilities from captured piece
-        // This was causing the bug where capturing a multi-ability piece gave too many abilities
+        // Apply the move
+        board[to[0]][to[1]] = movingPiece;
+        board[from[0]][from[1]] = null;
     }
-    
-    // Apply the move
-    board[to[0]][to[1]] = movingPiece;
-    board[from[0]][from[1]] = null;
     
     console.log('✅ [MOVE] Move applied successfully');
     return { success: true, capturedPiece };
+}
+
+/**
+ * Apply a bot move (handles engine format directly)
+ */
+function applyBotMove(board, engineMove) {
+    console.log('🤖 [BOT] Applying bot move:', engineMove);
+    
+    // Bot moves come in engine format, convert to standard format
+    const move = {
+        from: [engineMove.from_row, engineMove.from_col],
+        to: [engineMove.to_row, engineMove.to_col],
+        flags: engineMove.flags || 0
+    };
+    
+    return applyMoveToBoard(board, move);
+}
+
+/**
+ * Apply a player move (handles UI format)
+ */
+function applyPlayerMove(board, from, to, flags = 0) {
+    console.log('👤 [PLAYER] Applying player move:', from, to, 'flags:', flags);
+    
+    const move = {
+        from: Array.isArray(from) ? from : [from.row, from.col],
+        to: Array.isArray(to) ? to : [to.row, to.col],
+        flags: flags
+    };
+    
+    return applyMoveToBoard(board, move);
 }
 
 /**
@@ -344,9 +449,13 @@ function isValidMove(board, gameState, move) {
 
 // Export for use in other modules
 if (typeof module !== 'undefined' && module.exports) {
-    module.exports = ChessEngine;
+    module.exports = { ChessEngine, applyMoveToBoard, applyBotMove, applyPlayerMove, isValidMove };
 } else {
     window.ChessEngine = ChessEngine;
+    window.applyMoveToBoard = applyMoveToBoard;
+    window.applyBotMove = applyBotMove;
+    window.applyPlayerMove = applyPlayerMove;
+    window.isValidMove = isValidMove;
 }
 
 // Create global engine instance

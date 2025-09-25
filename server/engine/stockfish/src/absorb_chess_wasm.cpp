@@ -11,6 +11,7 @@
 #include <vector>
 #include <sstream>
 #include <chrono>
+#include <functional>
 
 #include "position.h"
 #include "search.h"
@@ -76,16 +77,16 @@ private:
     
     // Extract abilities from frontend piece encoding
     Abilities frontendPieceToAbilities(uint32_t frontend_piece) {
-        // Extract ability flags from bits 6-11
-        uint32_t abilityBits = (frontend_piece >> 6) & 63; // Shift right 6, mask 6 bits
+        // Frontend encoding uses bits at specific positions:
+        // ABILITY_PAWN = 64 (bit 6), ABILITY_KNIGHT = 128 (bit 7), etc.
         
         Abilities abilities = 0;
-        if (abilityBits & 1) abilities |= ABILITY_PAWN;    // ABILITY_PAWN = 64 >> 6 = 1
-        if (abilityBits & 2) abilities |= ABILITY_KNIGHT;  // ABILITY_KNIGHT = 128 >> 6 = 2
-        if (abilityBits & 4) abilities |= ABILITY_BISHOP;  // ABILITY_BISHOP = 256 >> 6 = 4
-        if (abilityBits & 8) abilities |= ABILITY_ROOK;    // ABILITY_ROOK = 512 >> 6 = 8
-        if (abilityBits & 16) abilities |= ABILITY_QUEEN;  // ABILITY_QUEEN = 1024 >> 6 = 16
-        if (abilityBits & 32) abilities |= ABILITY_KING;   // ABILITY_KING = 2048 >> 6 = 32
+        if (frontend_piece & 64) abilities |= ABILITY_PAWN;      // Frontend bit 6 -> Stockfish bit 0
+        if (frontend_piece & 128) abilities |= ABILITY_KNIGHT;   // Frontend bit 7 -> Stockfish bit 1  
+        if (frontend_piece & 256) abilities |= ABILITY_BISHOP;   // Frontend bit 8 -> Stockfish bit 2
+        if (frontend_piece & 512) abilities |= ABILITY_ROOK;     // Frontend bit 9 -> Stockfish bit 3
+        if (frontend_piece & 1024) abilities |= ABILITY_QUEEN;   // Frontend bit 10 -> Stockfish bit 4
+        if (frontend_piece & 2048) abilities |= ABILITY_KING;    // Frontend bit 11 -> Stockfish bit 5
         
         return abilities;
     }
@@ -111,9 +112,9 @@ public:
             Position::init();
             EM_ASM(console.log("✅ [WASM] Step 4 completed: Position::init"));
             
-            EM_ASM(console.log("⏳ [WASM] Step 5: Threads.set(1)..."));
-            //Threads.set(1);
-            EM_ASM(console.log("✅ [WASM] Step 5 completed: Threads.set"));
+            EM_ASM(console.log("⏳ [WASM] Step 5: Threads (disabled in WASM single-thread)..."));
+            // Threads are disabled in this WASM build; we'll run searches synchronously
+            EM_ASM(console.log("✅ [WASM] Step 5 completed: Threads disabled"));
             
             EM_ASM(console.log("⏳ [WASM] Step 6: Search::clear()..."));
             Search::clear();
@@ -123,9 +124,9 @@ public:
             TT.resize(16);  // Small hash table for WASM
             EM_ASM(console.log("✅ [WASM] Step 7 completed: TT.resize"));
             
-            EM_ASM(console.log("⏳ [WASM] Step 8: Threads.main()..."));
-            mainThread = Threads.main();
-            EM_ASM(console.log("✅ [WASM] Step 8 completed: Threads.main"));
+            EM_ASM(console.log("⏳ [WASM] Step 8: Threads.main() (skipped in WASM single-thread)..."));
+            mainThread = nullptr;
+            EM_ASM(console.log("✅ [WASM] Step 8 completed: mainThread set to nullptr"));
             
             EM_ASM(console.log("⏳ [WASM] Step 9: Creating states..."));
             states = StateListPtr(new std::deque<StateInfo>(1));
@@ -134,7 +135,7 @@ public:
             EM_ASM(console.log("⏳ [WASM] Step 10: Setting position..."));
             // Use standard starting position FEN
             const std::string startingFEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
-            pos.set(startingFEN, false, &states->back(), mainThread);
+            pos.set(startingFEN, false, &states->back(), nullptr);
             EM_ASM(console.log("✅ [WASM] Step 10 completed: position set"));
             
             initialized = true;
@@ -152,7 +153,7 @@ public:
     
     ~WasmChessEngine() {
         if (initialized) {
-            Threads.set(0);
+            // No threads to tear down in single-threaded WASM build
         }
     }
     
@@ -174,7 +175,7 @@ public:
             
             // Create new state and set position
             states = StateListPtr(new std::deque<StateInfo>(1));
-            pos.set(fen, false, &states->back(), mainThread);
+            pos.set(fen, false, &states->back(), nullptr);
             
             // Apply absorbed abilities after setting position
             applyAbilitiesFromBoard(js_board);
@@ -270,10 +271,16 @@ private:
                 
                 if (frontend_piece != 0) {
                     Abilities abilities = frontendPieceToAbilities(frontend_piece);
+                    Square sq = frontendToSquare(row, col);
+                    
+                    // Set abilities for this piece
+                    pos.set_abilities(sq, abilities);
+                    
+                    // Debug: Log abilities being set
                     if (abilities != 0) {
-                        Square sq = frontendToSquare(row, col);
-                        // We'll need to implement a way to store abilities
-                        // For now, we'll track them separately
+                        std::cout << "[DEBUG] Setting abilities for square " << sq 
+                                  << " (row=" << row << ", col=" << col << ") "
+                                  << "abilities=" << abilities << std::endl;
                     }
                 }
             }
@@ -300,33 +307,63 @@ public:
         auto start_time = std::chrono::high_resolution_clock::now();
         
         try {
-            // Set search limits
-            Search::LimitsType limits;
-            limits.depth = depth;
-            limits.time[pos.side_to_move()] = time_limit_ms;
-
             // Debug: Log position and limits
             std::cout << "[DEBUG] Starting search with position: " << pos.fen() << std::endl;
             std::cout << "[DEBUG] Search limits: depth=" << depth << ", time_limit_ms=" << time_limit_ms << std::endl;
-
-            // Use thread pool for search
-            Threads.start_thinking(pos, states, limits, false);
-
-            // Wait for search to complete
-            Thread* main_thread = Threads.main();
-            main_thread->wait_for_search_finished();
-
-            // Debug: Log root moves
-            std::cout << "[DEBUG] Root moves size: " << main_thread->rootMoves.size() << std::endl;
-            if (!main_thread->rootMoves.empty()) {
-                std::cout << "[DEBUG] First root move PV size: " << main_thread->rootMoves[0].pv.size() << std::endl;
+            
+            // Validate position before search
+            if (!pos.pos_is_ok()) {
+                std::cout << "[ERROR] Position is invalid, cannot search" << std::endl;
+                val result = val::object();
+                result.set("from_row", -1);
+                result.set("from_col", -1);
+                result.set("to_row", -1);
+                result.set("to_col", -1);
+                result.set("flags", 0);
+                result.set("evaluation", 0);
+                result.set("time_taken_ms", 0);
+                result.set("depth_reached", 0);
+                return result;
             }
-
-            // Get best move from main thread
+            // Single-threaded fallback: simple evaluation
             Move best_move = MOVE_NONE;
-            if (!main_thread->rootMoves.empty()) {
-                best_move = main_thread->rootMoves[0].pv[0];
+            Value best_score = -VALUE_INFINITE;
+            Color us = pos.side_to_move();
+            int considered = 0;
+            
+            // Debug: Check if any pieces have abilities (but limit output)
+            std::cout << "[DEBUG] Checking for pieces with abilities..." << std::endl;
+            int ability_count = 0;
+            for (Square sq = SQ_A1; sq <= SQ_H8 && ability_count < 5; ++sq) {
+                if (pos.piece_on(sq) != NO_PIECE) {
+                    for (PieceType pt = PAWN; pt <= KING; ++pt) {
+                        if (pos.has_ability(sq, pt)) {
+                            std::cout << "[DEBUG] Square " << sq << " has " << pt << " ability" << std::endl;
+                            ability_count++;
+                            if (ability_count >= 5) break;
+                        }
+                    }
+                }
             }
+            
+            // Simple 1-ply evaluation
+            for (const ExtMove& em : MoveList<LEGAL>(pos)) {
+                StateInfo st;
+                pos.do_move(em.move, st);
+                Value sc = Eval::evaluate(pos);
+                // Flip score if it's the opponent's turn after the move
+                if (pos.side_to_move() != us)
+                    sc = -sc;
+                pos.undo_move(em.move);
+                
+                if (sc > best_score) {
+                    best_score = sc;
+                    best_move = em.move;
+                }
+                ++considered;
+            }
+            
+            std::cout << "[DEBUG] Considered " << considered << " moves, best_score: " << best_score << std::endl;
             
             auto end_time = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
@@ -344,16 +381,16 @@ public:
                 result.set("to_row", to_row);
                 result.set("to_col", to_col);
                 result.set("flags", type_of(best_move));
-                result.set("evaluation", int(Eval::evaluate(pos)));
+                result.set("evaluation", int(best_score));
                 result.set("time_taken_ms", int(duration.count()));
-                result.set("depth_reached", depth);
+                result.set("depth_reached", 1);
             } else {
                 result.set("from_row", -1);
                 result.set("from_col", -1);
                 result.set("to_row", -1);
                 result.set("to_col", -1);
                 result.set("flags", 0);
-                result.set("evaluation", int(Eval::evaluate(pos)));
+                result.set("evaluation", 0);
                 result.set("time_taken_ms", int(duration.count()));
                 result.set("depth_reached", 0);
             }
@@ -407,23 +444,28 @@ public:
         return false;
     }
     
-    // Get the best move using search
+    // Get the best move using search (WASM-safe single-threaded version)
     std::string getBestMove(int depth = 5) {
         if (!initialized) return "";
         
         try {
-            Search::LimitsType limits;
-            limits.depth = depth;
+            // WASM-safe single-threaded search
+            Move best_move = MOVE_NONE;
+            Value best_score = -VALUE_INFINITE;
             
-            Threads.start_thinking(pos, states, limits, false);
-            Threads.main()->wait_for_search_finished();
-            
-            Move bestMove = MOVE_NONE;
-            if (!Threads.main()->rootMoves.empty()) {
-                bestMove = Threads.main()->rootMoves[0].pv[0];
+            for (const ExtMove& em : MoveList<LEGAL>(pos)) {
+                StateInfo st;
+                pos.do_move(em.move, st);
+                Value sc = -Eval::evaluate(pos); // Negate since opponent to move after our move
+                pos.undo_move(em.move);
+                
+                if (sc > best_score) {
+                    best_score = sc;
+                    best_move = em.move;
+                }
             }
             
-            return bestMove != MOVE_NONE ? UCI::move(bestMove, pos.is_chess960()) : "";
+            return best_move != MOVE_NONE ? UCI::move(best_move, pos.is_chess960()) : "";
         } catch (...) {
             return "";
         }
@@ -523,6 +565,12 @@ public:
         }
         
         try {
+            // Debug: Print MoveType enum values
+            std::cout << "[DEBUG] MoveType enum values - NORMAL: " << static_cast<int>(NORMAL) 
+                      << ", PROMOTION: " << static_cast<int>(PROMOTION) 
+                      << ", ENPASSANT: " << static_cast<int>(ENPASSANT) 
+                      << ", CASTLING: " << static_cast<int>(CASTLING) << std::endl;
+            
             val js_moves = val::array();
             int index = 0;
             
@@ -540,7 +588,16 @@ public:
                 js_move.set("from_col", from_col);
                 js_move.set("to_row", to_row);
                 js_move.set("to_col", to_col);
-                js_move.set("flags", static_cast<int>(type_of(m))); // Convert MoveType to int
+                
+                int move_flags = static_cast<int>(type_of(m));
+                js_move.set("flags", move_flags);
+                
+                // Debug: Log castling moves specifically
+                if (from_row == 7 && from_col == 4 && (to_col == 2 || to_col == 6)) {
+                    std::cout << "[DEBUG] Potential castling move: [" << from_row << "," << from_col 
+                              << "] -> [" << to_row << "," << to_col << "] flags: " << move_flags 
+                              << " raw_move: " << m << std::endl;
+                }
                 
                 js_moves.set(index++, js_move);
             }

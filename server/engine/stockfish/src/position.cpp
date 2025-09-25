@@ -460,9 +460,28 @@ Bitboard Position::slider_blockers(Bitboard sliders, Square s, Bitboard& pinners
 
     if (b && !more_than_one(b))
     {
-        blockers |= b;
-        if (b & pieces(color_of(piece_on(s))))
-            pinners |= sniperSq;
+        Square blockerSq = lsb(b);
+        Piece blocker = piece_on(blockerSq);
+        
+        // Check if this piece is actually pinned by simulating its removal
+        if (blocker != NO_PIECE && color_of(blocker) == color_of(piece_on(s)))
+        {
+            // Temporarily remove the potential blocker and check if king would be attacked
+            Bitboard tempOccupancy = occupancy ^ b;
+            Bitboard remainingBlockers = between_bb(s, sniperSq) & tempOccupancy;
+            
+            // Only consider it pinned if no other pieces would block after removal
+            if (!remainingBlockers)
+            {
+                blockers |= b;
+                pinners |= sniperSq;
+            }
+        }
+        else if (blocker != NO_PIECE)
+        {
+            // Different color piece, still a blocker but not pinned
+            blockers |= b;
+        }
     }
   }
   return blockers;

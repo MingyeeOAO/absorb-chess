@@ -35,23 +35,52 @@ U64 bishop_mask(int sq) {
     return m;
 }
 
-U64 rook_attacks_on_the_fly(int sq, U64 blockers){
-    U64 att = 0ULL;
-    int r = rank_of(sq), f = file_of(sq);
-    for (int rr=r+1; rr<=7; ++rr){ att |= square_bb(rr*8 + f); if(blockers & square_bb(rr*8 + f)) break; }
-    for (int rr=r-1; rr>=0; --rr){ att |= square_bb(rr*8 + f); if(blockers & square_bb(rr*8 + f)) break; }
-    for (int ff=f+1; ff<=7; ++ff){ att |= square_bb(r*8 + ff); if(blockers & square_bb(r*8 + ff)) break; }
-    for (int ff=f-1; ff>=0; --ff){ att |= square_bb(r*8 + ff); if(blockers & square_bb(r*8 + ff)) break; }
-    return att;
+
+// Sliding attack logic adapted from the engine implementation. The generator
+// uses plain ints/U64 for compatibility while keeping the same stepping
+// behaviour (prevents wrap-around across files).
+// Re-implement sliding attack behaviour using the exact stepping logic
+// used by the engine: use Direction arrays and the "while(safe_destination(s,d) && !(occupied & s)) attacks |= (s += d);"
+// This keeps variable names and loop structure similar to the engine implementation.
+static inline bool is_ok_sq(int s) { return (s >= 0 && s < 64); }
+static inline int sq_distance(int s1, int s2) {
+    int f1 = file_of(s1), r1 = rank_of(s1);
+    int f2 = file_of(s2), r2 = rank_of(s2);
+    return std::max(std::abs(f1 - f2), std::abs(r1 - r2));
 }
-U64 bishop_attacks_on_the_fly(int sq, U64 blockers){
-    U64 att = 0ULL;
-    int r = rank_of(sq), f = file_of(sq);
-    for (int rr=r+1, ff=f+1; rr<=7 && ff<=7; ++rr, ++ff){ att |= square_bb(rr*8 + ff); if(blockers & square_bb(rr*8 + ff)) break; }
-    for (int rr=r+1, ff=f-1; rr<=7 && ff>=0; ++rr, --ff){ att |= square_bb(rr*8 + ff); if(blockers & square_bb(rr*8 + ff)) break; }
-    for (int rr=r-1, ff=f+1; rr>=0 && ff<=7; --rr, ++ff){ att |= square_bb(rr*8 + ff); if(blockers & square_bb(rr*8 + ff)) break; }
-    for (int rr=r-1, ff=f-1; rr>=0 && ff>=0; --rr, --ff){ att |= square_bb(rr*8 + ff); if(blockers & square_bb(rr*8 + ff)) break; }
-    return att;
+static inline bool safe_destination_int(int s, int step) {
+    int to = s + step;
+    return is_ok_sq(to) && (sq_distance(s, to) <= 2);
+}
+
+static inline U64 sliding_attack_on_the_fly(bool rook, int sq, U64 occupied) {
+    U64 attacks = 0ULL;
+
+    const int RookDirections[4]   = {  8, -8,  1, -1 }; // N, S, E, W
+    const int BishopDirections[4] = {  9, -7, -9,  7 }; // NE, SE, SW, NW
+
+    const int *dirs = rook ? RookDirections : BishopDirections;
+
+    for (int i = 0; i < 4; ++i) {
+        int d = dirs[i];
+        int s = sq;
+        // Mirror engine loop: while(safe_destination(s, d) && !(occupied & s)) attacks |= (s += d);
+        while (safe_destination_int(s, d) && !(occupied & (1ULL << s))) {
+            s += d;
+            attacks |= (1ULL << s);
+        }
+    }
+
+    return attacks;
+}
+
+// Generator helper wrappers expected by the rest of this program
+static inline U64 rook_attacks_on_the_fly(int sq, U64 occupied) {
+    return sliding_attack_on_the_fly(true, sq, occupied);
+}
+
+static inline U64 bishop_attacks_on_the_fly(int sq, U64 occupied) {
+    return sliding_attack_on_the_fly(false, sq, occupied);
 }
 
 vector<int> mask_bits(U64 mask){
@@ -78,27 +107,56 @@ U64 find_magic_for_square(int sq, bool rook){
     auto bits = mask_bits(mask);
     int B = (int)bits.size();
     int subsets = 1<<B;
-    vector<U64> ref(subsets);
+
+    // Precompute occupancies and reference attacks
+    vector<U64> occupancy(subsets), reference(subsets);
     for (int i=0;i<subsets;++i){
-        U64 occ = index_to_occ(i, bits);
-        ref[i] = rook ? rook_attacks_on_the_fly(sq, occ) : bishop_attacks_on_the_fly(sq, occ);
+        occupancy[i] = index_to_occ(i, bits);
+        reference[i] = rook ? rook_attacks_on_the_fly(sq, occupancy[i])
+                            : bishop_attacks_on_the_fly(sq, occupancy[i]);
     }
+
     unsigned shift = 64 - B;
-    for (int attempt=0; attempt < 2000000; ++attempt){
-        U64 magic = rnd64_fewbits();
-        if (popcount64((mask * magic) & 0xFF00000000000000ULL) < 6) continue;
-        unordered_map<unsigned, U64> table;
-        bool fail=false;
-        for (int i=0;i<subsets && !fail;++i){
-            U64 occ = index_to_occ(i, bits);
-            unsigned idx = transform_idx(occ, magic, shift);
-            auto it = table.find(idx);
-            if (it == table.end()) table[idx] = ref[i];
-            else if (it->second != ref[i]) fail = true;
+
+    // Engine-like epoch verification to avoid clearing table each attempt
+    const int tableSize = 1 << B;
+    vector<int> epoch(tableSize, 0);
+    vector<U64> table(tableSize, 0ULL);
+
+    // Seeded RNG to mirror engine behaviour (per-rank seed could be used)
+    std::mt19937_64 local_rng((unsigned)chrono::high_resolution_clock::now().time_since_epoch().count());
+
+    const int MAX_ATTEMPTS = 20000000; // hard cap to avoid infinite loops
+    int attempts = 0;
+    int counter = 1;
+
+    while (attempts < MAX_ATTEMPTS) {
+        ++attempts;
+        U64 magic = local_rng();
+
+        if (popcount64((mask * magic) & 0xFF00000000000000ULL) < 4) continue;
+
+        ++counter;
+        bool fail = false;
+
+        for (int i = 0; i < subsets; ++i) {
+            unsigned idx = transform_idx(occupancy[i], magic, shift);
+            if (epoch[idx] < counter) {
+                epoch[idx] = counter;
+                table[idx] = reference[i];
+            } else if (table[idx] != reference[i]) {
+                fail = true;
+                break;
+            }
         }
+
         if (!fail) return magic;
     }
-    return 0ULL;
+
+    // Fallback: warn and return a pseudo-random magic so generation can continue
+    cerr << "Warning: failed to find perfect magic for square " << sq << " (rook=" << rook
+         << ") after " << attempts << " attempts; returning fallback magic.\n";
+    return local_rng();
 }
 
 int main(){

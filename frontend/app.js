@@ -207,7 +207,6 @@ class ChessApp {
             this.gameState = {
                 board: this.createInitialBoard(),
                 current_turn: 'white',
-                currentTurn: 'white',  // Keep both for compatibility
                 game_over: false,
                 gameOver: false,  // Keep both for compatibility
                 winner: null,
@@ -1746,13 +1745,13 @@ class ChessApp {
 
         if (this.selectedSquare) {
             // Check if clicking on a possible move
-            const isPossibleMove = this.possibleMoves.some(move => 
+            const possibleMove = this.possibleMoves.find(move => 
                 move.row === row && move.col === col
             );
             
-            if (isPossibleMove) {
-                // Valid move - attempt it
-                this.attemptMove(this.selectedSquare, { row, col });
+            if (possibleMove) {
+                // Valid move - attempt it with flags
+                this.attemptMove(this.selectedSquare, { row, col, flags: possibleMove.flags });
             } else {
                 // Invalid move - cancel selection
                 this.clearSelection();
@@ -1816,7 +1815,8 @@ class ChessApp {
             this.sendMessage({
                 type: 'move_piece',
                 from: [from.row, from.col],
-                to: [to.row, to.col]
+                to: [to.row, to.col],
+                flags: to.flags || 0  // Include flags if available
             });
         }
         // Clear selection and cached moves since they will change after the move
@@ -1825,88 +1825,67 @@ class ChessApp {
     }
     
     /**
-     * Handle move in bot game
+     * Handle move in bot game (player move)
      */
     async handleBotGameMove(from, to) {
         try {
-            console.log('🎮 Handling bot game move:', from, to);
-            // Get the complete move with flags from engine
-            let moveResult = await this.bot.engine.getMoveWithFlags(
+            console.log('🎮 Handling player move in bot game:', from, to, 'flags:', to.flags);
+            
+            // Use the new applyPlayerMove function for cleaner handling
+            const moveResult = applyPlayerMove(
                 this.gameState.board, 
-                this.gameState,
-                [from.row, from.col],
-                [to.row, to.col]
+                from, 
+                to, 
+                to.flags || 0
             );
-            if (!moveResult) {
-                console.error('❌ Invalid move - not found in legal moves');
+            
+            if (!moveResult.success) {
+                console.error('❌ Failed to apply player move');
                 return;
             }
-            // Detect castling for player (if engine does not provide flag)
-            function detectCastlingFlag(piece, from, to) {
-                if (!piece || piece.type !== 'king') return 0;
-                // King-side castling
-                if (from.row === to.row && to.col - from.col === 2) return 2; // flag 2
-                // Queen-side castling
-                if (from.row === to.row && from.col - to.col === 2) return 3; // flag 3
-                return 0;
+            
+            // Update game state after successful move
+            this.gameState.current_turn = this.gameState.current_turn === 'white' ? 'black' : 'white';
+            this.addMoveToHistory({
+                from: [from.row, from.col],
+                to: [to.row, to.col],
+                flags: to.flags || 0
+            });
+            this.lastMoveHighlight = { from: [from.row, from.col], to: [to.row, to.col] };
+            
+            // Show absorption feedback
+            if (moveResult.capturedPiece) {
+                console.log('🎉 [ABSORPTION] Player captured piece with abilities:', moveResult.capturedPiece.abilities);
             }
-            // Handle multiple moves (promotion options)
-            if (Array.isArray(moveResult)) {
-                // Check if these are actually promotion moves (flags 4-7)
-                const hasPromotionMoves = moveResult.some(move => move.flags >= 4 && move.flags <= 7);
-                if (hasPromotionMoves) {
-                    // Verify this is a pawn reaching promotion rank
-                    const firstMove = moveResult[0];
-                    const piece = this.gameState.board[firstMove.from[0]][firstMove.from[1]];
-                    const isActualPawnPromotion = (piece && piece.type === 'pawn' && 
-                        ((piece.color === 'white' && firstMove.to[0] === 0) || 
-                         (piece.color === 'black' && firstMove.to[0] === 7)));
-                    if (isActualPawnPromotion) {
-                        this.showPromotionModalForMove(firstMove);
-                        return;
-                    }
-                }
-                // If not promotion moves, just use the first move
-                const moveToUse = moveResult[0];
-                // Detect castling for player
-                const piece = this.gameState.board[moveToUse.from[0]][moveToUse.from[1]];
-                const castlingFlag = detectCastlingFlag(piece, {row: moveToUse.from[0], col: moveToUse.from[1]}, {row: moveToUse.to[0], col: moveToUse.to[1]});
-                moveToUse.flags = castlingFlag;
-                const success = await this.applyLocalMove(moveToUse);
-                if (success && this.bot) {
-                    await this.bot.onPlayerMove(moveToUse);
-                    this.handleNextTurn();
-                }
-                return;
+            
+            // Redraw and update UI
+            this.renderChessBoard();
+            this.updateCurrentTurn();
+            await this.updateCheckStatus();
+            this.renderChessBoard();
+            
+            // Notify bot of player move
+            if (this.bot) {
+                const moveForBot = {
+                    from: [from.row, from.col],
+                    to: [to.row, to.col],
+                    flags: to.flags || 0
+                };
+                await this.bot.onPlayerMove(moveForBot);
             }
-            // Single move - check if it's a promotion that needs user input
-            let completeMove = moveResult;
-            // Detect castling for player
-            const piece = this.gameState.board[completeMove.from[0]][completeMove.from[1]];
-            const castlingFlag = detectCastlingFlag(piece, {row: completeMove.from[0], col: completeMove.from[1]}, {row: completeMove.to[0], col: completeMove.to[1]});
-            if ((completeMove.flags === undefined || completeMove.flags === 0) && castlingFlag) {
-                completeMove.flags = castlingFlag;
+            
+            // Check for game end conditions
+            await this.checkGameEndConditions();
+            
+            // Handle next turn (bot's turn)
+            if (!this.gameState.game_over && !this.gameState.gameOver) {
+                await this.handleNextTurn();
             }
-            // More robust promotion check: must have promotion flags AND be an actual pawn promotion
-            const hasPromotionFlags = completeMove.flags >= 4 && completeMove.flags <= 7;
-            if (hasPromotionFlags) {
-                const isActualPawnPromotion = (piece && piece.type === 'pawn' && 
-                    ((piece.color === 'white' && completeMove.to[0] === 0) || 
-                     (piece.color === 'black' && completeMove.to[0] === 7)));
-                if (isActualPawnPromotion) {
-                    this.showPromotionModalForMove(completeMove);
-                    return;
-                } else {
-                    completeMove.flags = 0;
-                }
-            }
-            const success = await this.applyLocalMove(completeMove);
-            if (success && this.bot) {
-                await this.bot.onPlayerMove(completeMove);
-                this.handleNextTurn();
-            }
+            
+            return true;
         } catch (error) {
             console.error('Error handling bot game move:', error);
+            return false;
         }
     }
     
@@ -2005,8 +1984,15 @@ class ChessApp {
                 return false;
             }
 
-            // Apply move manually (engine is only for AI, not board management)
-            const moveResult = applyMoveToBoard(this.gameState.board, move);
+            // Determine if this is a player move or bot move and apply accordingly
+            let moveResult;
+            if (move.from_row !== undefined) {
+                // Bot move format (from engine)
+                moveResult = applyBotMove(this.gameState.board, move);
+            } else {
+                // Player move format
+                moveResult = applyMoveToBoard(this.gameState.board, move);
+            }
 
             if (moveResult.success) {
                 // Update game state
@@ -2213,10 +2199,24 @@ class ChessApp {
             this.allValidMoves = new Map();
 
             for (const [position, moves] of Object.entries(legalMoves)) {
-                this.allValidMoves.set(position, moves.map(move => ({
-                    row: move[0],
-                    col: move[1]
-                })));
+                this.allValidMoves.set(position, moves.map(move => {
+                    // Handle both old format [row, col] and new format {to: [row, col], flags: flags}
+                    if (Array.isArray(move)) {
+                        // Old format: [row, col]
+                        return {
+                            row: move[0],
+                            col: move[1],
+                            flags: 0
+                        };
+                    } else {
+                        // New format: {to: [row, col], flags: flags}
+                        return {
+                            row: move.to[0],
+                            col: move.to[1],
+                            flags: move.flags || 0
+                        };
+                    }
+                }));
             }
 
             console.log('[DEBUG] Processed allValidMoves:', this.allValidMoves);

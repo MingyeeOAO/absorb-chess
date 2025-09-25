@@ -93,7 +93,6 @@ class ChessBot {
 
         // If it's bot's turn, make bot move
         console.log('🔍 [BOT] Checking if bot should move:', {
-            currentTurn: this.app.gameState.current_turn,
             current_turn: this.app.gameState.current_turn,
             botColor: this.botColor
         });
@@ -114,7 +113,7 @@ class ChessBot {
             console.log('🚫 [BOT] Not making move:', {
                 gameActive: this.gameActive,
                 isThinking: this.isThinking,
-                currentTurn: this.app.gameState?.current_turn,
+                current_turn: this.app.gameState?.current_turn,
                 botColor: this.botColor
             });
             return;

@@ -35,6 +35,6 @@ if %errorlevel% == 0 (
 )
 
 REM
-cd /d ../
+cd /d ..\
 
 pause
