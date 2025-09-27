@@ -173,6 +173,100 @@ namespace {
         }
     }
 
+    // Absorb Chess: Generate pawn-like moves for non-pawn pieces that gained pawn ability
+    // Rule: non-pawn pieces with pawn ability can only single-push and capture diagonally.
+    Bitboard piecesWithPawnAbilityAll = pos.pieces_with_ability(Us, PAWN);
+    for (PieceType pt = KNIGHT; pt <= QUEEN; ++pt) {
+        Bitboard piecesWithPawnAbility = piecesWithPawnAbilityAll & pos.pieces(Us, pt);
+        if (!piecesWithPawnAbility)
+            continue;
+
+        Bitboard piecesOn7    = piecesWithPawnAbility & TRank7BB;
+        Bitboard piecesNotOn7 = piecesWithPawnAbility & ~TRank7BB;
+
+        // Single pushes only (no double push)
+        if (Type != CAPTURES)
+        {
+            Bitboard emptySquaresLocal = (Type == QUIETS || Type == QUIET_CHECKS ? target : ~pos.pieces());
+
+            Bitboard b1 = shift<Up>(piecesNotOn7) & emptySquaresLocal;
+
+            if (Type == EVASIONS) // Consider only blocking squares
+                b1 &= target;
+
+            while (b1)
+            {
+                Square to = pop_lsb(&b1);
+                *moveList++ = make_move(to - Up, to);
+            }
+        }
+
+        // Pieces on 7th: allow single forward move (no promotions) and captures (no promotions)
+        if (piecesOn7)
+        {
+            Bitboard fwd = shift<Up>(piecesOn7) & ~pos.pieces();
+            if (Type == EVASIONS)
+                fwd &= target;
+
+            while (fwd)
+            {
+                Square to = pop_lsb(&fwd);
+                *moveList++ = make_move(to - Up, to);
+            }
+
+            Bitboard c1 = shift<UpRight>(piecesOn7) & enemies;
+            Bitboard c2 = shift<UpLeft >(piecesOn7) & enemies;
+
+            while (c1)
+                *moveList++ = make_move(pop_lsb(&c1) - UpRight, pop_lsb(&c1));
+
+            while (c2)
+                *moveList++ = make_move(pop_lsb(&c2) - UpLeft, pop_lsb(&c2));
+        }
+        
+        // Captures for pieces not on 7th
+        if (Type == CAPTURES || Type == EVASIONS || Type == NON_EVASIONS)
+        {
+            Bitboard b1 = shift<UpRight>(piecesNotOn7) & enemies;
+            Bitboard b2 = shift<UpLeft >(piecesNotOn7) & enemies;
+
+            while (b1)
+            {
+                Square to = pop_lsb(&b1);
+                *moveList++ = make_move(to - UpRight, to);
+            }
+
+            while (b2)
+            {
+                Square to = pop_lsb(&b2);
+                *moveList++ = make_move(to - UpLeft, to);
+            }
+        }
+    }
+
+    // Absorb Chess: Generate additional ability moves for pawns (e.g., pawn that gained knight/rook/etc.)
+    Bitboard allPawns = pawnsOn7 | pawnsNotOn7;
+    while (allPawns) {
+        Square from = pop_lsb(&allPawns);
+        // For each ability other than PAWN and KING, generate the corresponding moves
+        for (PieceType absorbedPt = KNIGHT; absorbedPt <= QUEEN; ++absorbedPt) {
+            if (!pos.has_ability(from, absorbedPt)) continue;
+
+            Bitboard abilMoves = 0;
+            if (absorbedPt == KNIGHT) {
+                abilMoves = attacks_bb<KNIGHT>(from) & target;
+            } else {
+                abilMoves = attacks_bb(absorbedPt, from, pos.pieces()) & target;
+            }
+
+            if (Type == EVASIONS)
+                abilMoves &= pos.check_squares(absorbedPt);
+
+            while (abilMoves)
+                *moveList++ = make_move(from, pop_lsb(&abilMoves));
+        }
+    }
+
     return moveList;
   }
 
@@ -258,56 +352,6 @@ namespace {
 
     moveList = generate_pawn_moves<Us, Type>(pos, moveList, target);
     
-    // Absorb Chess: Generate absorbed pawn moves for non-pawn pieces
-    if constexpr (!Checks) { // Only for non-checking moves to avoid complexity
-        for (PieceType pt = KNIGHT; pt <= KING; ++pt) {
-            Bitboard piecesWithPawnAbility = pos.pieces_with_ability(Us, PAWN) & pos.pieces(Us, pt);
-            while (piecesWithPawnAbility) {
-                Square from = pop_lsb(&piecesWithPawnAbility);
-                
-                // Forward pawn moves
-                Square forward = from + pawn_push(Us);
-                if (distance(from, forward) == 1 && pos.empty(forward) && (target & forward)) {
-                    if (relative_rank(Us, forward) == RANK_8) {
-                        // Promotion moves
-                        *moveList++ = make<PROMOTION>(from, forward, QUEEN);
-                        *moveList++ = make<PROMOTION>(from, forward, ROOK);
-                        *moveList++ = make<PROMOTION>(from, forward, BISHOP);
-                        *moveList++ = make<PROMOTION>(from, forward, KNIGHT);
-                    } else {
-                        *moveList++ = make_move(from, forward);
-                        
-                        // Double pawn push
-                        if (relative_rank(Us, from) == RANK_2) {
-                            Square doubleForward = forward + pawn_push(Us);
-                            if (pos.empty(doubleForward) && (target & doubleForward))
-                                *moveList++ = make_move(from, doubleForward);
-                        }
-                    }
-                }
-                
-                // Pawn captures
-                Bitboard captures = pawn_attacks_bb(Us, from) & pos.pieces(~Us) & target;
-                while (captures) {
-                    Square to = pop_lsb(&captures);
-                    if (relative_rank(Us, to) == RANK_8) {
-                        // Capture promotions
-                        *moveList++ = make<PROMOTION>(from, to, QUEEN);
-                        *moveList++ = make<PROMOTION>(from, to, ROOK);
-                        *moveList++ = make<PROMOTION>(from, to, BISHOP);
-                        *moveList++ = make<PROMOTION>(from, to, KNIGHT);
-                    } else {
-                        *moveList++ = make_move(from, to);
-                    }
-                }
-                
-                // En passant captures
-                if (pos.ep_square() != SQ_NONE && (pawn_attacks_bb(Us, from) & pos.ep_square())) {
-                    *moveList++ = make<ENPASSANT>(from, pos.ep_square());
-                }
-            }
-        }
-    }
     moveList = generate_moves<Us, KNIGHT, Checks>(pos, moveList, target);
     moveList = generate_moves<Us, BISHOP, Checks>(pos, moveList, target);
     moveList = generate_moves<Us,   ROOK, Checks>(pos, moveList, target);

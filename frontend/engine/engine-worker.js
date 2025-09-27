@@ -229,10 +229,20 @@ self.onmessage = async function(e) {
                     const to = [engineMove.to_row, engineMove.to_col];
                     const isInvalid = from[0] < 0 || from[1] < 0 || to[0] < 0 || to[1] < 0;
                     if (!isInvalid) {
+                        // Coerce flags to a plain number in case the WASM/emscripten layer
+                        // returned a wrapped object. This ensures special move flags
+                        // (castling/en-passant/promotion) serialize correctly via postMessage.
+                        let flagsNum = 0;
+                        try {
+                            flagsNum = (typeof engineMove.flags === 'number') ? engineMove.flags : Number(engineMove.flags) || 0;
+                        } catch (e) {
+                            flagsNum = 0;
+                        }
+
                         move = {
                             from,
                             to,
-                            flags: engineMove.flags || 0,
+                            flags: flagsNum,
                             evaluation: engineMove.evaluation || 0
                         };
                     } else {
@@ -290,10 +300,18 @@ self.onmessage = async function(e) {
                         convertedMoves[fromKey] = [];
                     }
 
+                    // Coerce flags to a primitive number to avoid sending Emscripten wrappers
+                    let flagVal = 0;
+                    try {
+                        flagVal = (typeof move.flags === 'number') ? move.flags : Number(move.flags) || 0;
+                    } catch (e) {
+                        flagVal = 0;
+                    }
+
                     // Preserve move flags from engine
                     convertedMoves[fromKey].push({
                         to: [move.to_row, move.to_col],
-                        flags: move.flags || 0
+                        flags: flagVal
                     });
                 }
 
@@ -328,7 +346,12 @@ self.onmessage = async function(e) {
                         move.to_row === data.to[0] && 
                         move.to_col === data.to[1]) {
                         
-                        const moveFlags = move.flags || 0;
+                        let moveFlags = 0;
+                        try {
+                            moveFlags = (typeof move.flags === 'number') ? move.flags : Number(move.flags) || 0;
+                        } catch (e) {
+                            moveFlags = 0;
+                        }
                         // console.log('ENGINE MOVE MATCH:', {
                         //     from: [move.from_row, move.from_col],
                         //     to: [move.to_row, move.to_col],

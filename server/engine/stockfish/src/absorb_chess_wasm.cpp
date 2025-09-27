@@ -573,33 +573,66 @@ public:
             
             val js_moves = val::array();
             int index = 0;
-            
-            for (const ExtMove& move : MoveList<LEGAL>(pos)) {
-                Move m = move.move;
-                
-                val js_move = val::object();
-                
-                // Convert to frontend coordinates
-                int from_row, from_col, to_row, to_col;
-                squareToFrontend(from_sq(m), from_row, from_col);
-                squareToFrontend(to_sq(m), to_row, to_col);
-                
-                js_move.set("from_row", from_row);
-                js_move.set("from_col", from_col);
-                js_move.set("to_row", to_row);
-                js_move.set("to_col", to_col);
-                
-                int move_flags = static_cast<int>(type_of(m));
-                js_move.set("flags", move_flags);
-                
-                // Debug: Log castling moves specifically
-                if (from_row == 7 && from_col == 4 && (to_col == 2 || to_col == 6)) {
-                    std::cout << "[DEBUG] Potential castling move: [" << from_row << "," << from_col 
-                              << "] -> [" << to_row << "," << to_col << "] flags: " << move_flags 
-                              << " raw_move: " << m << std::endl;
+
+            // Additional defensive logging: print FEN and basic position info before move generation
+            std::cout << "[DEBUG] getLegalMoves() starting. FEN=" << pos.fen()
+                      << " sideToMove=" << (pos.side_to_move() == WHITE ? "WHITE" : "BLACK")
+                      << " checkers=" << (pos.checkers() ? 1 : 0) << std::endl;
+
+            try {
+                for (const ExtMove& move : MoveList<LEGAL>(pos)) {
+                    Move m = move.move;
+
+                    // Per-move try/catch to capture the exact move that triggers a crash
+                    try {
+                        val js_move = val::object();
+
+                        // Convert to frontend coordinates
+                        int from_row, from_col, to_row, to_col;
+                        squareToFrontend(from_sq(m), from_row, from_col);
+                        squareToFrontend(to_sq(m), to_row, to_col);
+
+                        // Validate squares
+                        if (!is_ok(from_sq(m)) || !is_ok(to_sq(m))) {
+                            std::cout << "[WARN] getLegalMoves() encountered invalid move squares: raw_move=" << m
+                                      << " from=" << static_cast<int>(from_sq(m)) << " to=" << static_cast<int>(to_sq(m)) << std::endl;
+                        }
+
+                        js_move.set("from_row", from_row);
+                        js_move.set("from_col", from_col);
+                        js_move.set("to_row", to_row);
+                        js_move.set("to_col", to_col);
+
+                        int move_flags = static_cast<int>(type_of(m));
+                        js_move.set("flags", move_flags);
+
+                        // Debug: Log castling moves specifically
+                        if (from_row == 7 && from_col == 4 && (to_col == 2 || to_col == 6)) {
+                            std::cout << "[DEBUG] Potential castling move: [" << from_row << "," << from_col
+                                      << "] -> [" << to_row << "," << to_col << "] flags: " << move_flags
+                                      << " raw_move: " << m << std::endl;
+                        }
+
+                        js_moves.set(index++, js_move);
+                    } catch (const std::exception& e) {
+                        std::cout << "[ERROR] Exception while processing move index " << index << 
+                                  " raw_move=" << move.move << " ex=" << e.what() << std::endl;
+                        std::cout << "[ERROR] Position dump: " << getBoardState() << std::endl;
+                        throw; // Re-throw to outer catch to return empty array and avoid undefined memory access
+                    } catch (...) {
+                        std::cout << "[ERROR] Unknown exception while processing move index " << index << " raw_move=" << move.move << std::endl;
+                        std::cout << "[ERROR] Position dump: " << getBoardState() << std::endl;
+                        throw;
+                    }
                 }
-                
-                js_moves.set(index++, js_move);
+            } catch (const std::exception& e) {
+                std::cout << "[FATAL] getLegalMoves() aborted due to exception: " << e.what() << std::endl;
+                // Return empty move list to the caller; worker will log the error
+                return val::array();
+            } catch (...) {
+                std::cout << "[FATAL] getLegalMoves() aborted due to unknown exception (possible memory access)." << std::endl;
+                std::cout << "[FATAL] Position dump: " << getBoardState() << std::endl;
+                return val::array();
             }
             
             return js_moves;

@@ -346,7 +346,13 @@ void Position::set_state(StateInfo* si) const {
           si->pawnKey ^= Zobrist::psq[pc][s];
 
       else if (type_of(pc) != KING)
-          si->nonPawnMaterial[color_of(pc)] += PieceValue[MG][pc];
+      {
+          // Absorb Chess: count non-pawn material using effective piece types
+          Abilities abilities = abilities_on(s);
+          PieceType effectivePt = get_effective_material_type(type_of(pc), abilities);
+          Piece effectivePc = make_piece(color_of(pc), effectivePt);
+          si->nonPawnMaterial[color_of(pc)] += PieceValue[MG][effectivePc];
+      }
   }
 
   if (si->epSquare != SQ_NONE)

@@ -38,19 +38,21 @@ namespace AbsorbChess {
 
 int main(int argc, char* argv[]) {
 
-  std::cout << engine_info() << std::endl;
+  // std::cout << engine_info() << std::endl;
 
-  UCI::init(Options);
-  Tune::init();
-  PSQT::init();
+  // UCI::init(Options);
+  // Tune::init();
+  // PSQT::init();
+  std::cout << "hi";
   Bitboards::init();
-  Position::init();
-  Bitbases::init();
-  Endgames::init();
-  AbsorbChess::init_tables(); // Initialize absorb chess lookup tables
-  Threads.set(size_t(Options["Threads"]));
-  TT.resize(Options["Hash"]); // After threads are up
-  Search::clear(); // After threads are up
+  std::cout << "hello";
+  // Position::init();
+  // Bitbases::init();
+  // Endgames::init();
+  // AbsorbChess::init_tables(); // Initialize absorb chess lookup tables
+  // Threads.set(size_t(Options["Threads"]));
+  // TT.resize(Options["Hash"]); // After threads are up
+  // Search::clear(); // After threads are up
 
   return 0;
 }
