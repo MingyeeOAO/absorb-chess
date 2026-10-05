@@ -371,15 +371,20 @@ function applyMoveToBoard(board, move) {
     if (flags !== MoveType.CASTLING) {
         // Handle absorption if there's a capture
         if (capturedPiece && capturedPiece.color !== movingPiece.color) {
-            console.log('💥 [ABSORPTION] Capturing piece:', capturedPiece.type);
+            console.log('💥 [ABSORPTION] Capturing piece:', capturedPiece.type, 'with abilities:', capturedPiece.abilities);
             
-            // Add captured piece's base type to abilities
             if (!movingPiece.abilities) {
                 movingPiece.abilities = [movingPiece.type];
             }
-            if (!movingPiece.abilities.includes(capturedPiece.type)) {
-                movingPiece.abilities.push(capturedPiece.type);
-                console.log('✨ [ABSORPTION] Gained ability:', capturedPiece.type);
+            // Transfer ALL abilities from the captured piece, not just its base type
+            const abilitiesToTransfer = capturedPiece.abilities && capturedPiece.abilities.length > 0
+                ? capturedPiece.abilities
+                : [capturedPiece.type];
+            for (const ability of abilitiesToTransfer) {
+                if (!movingPiece.abilities.includes(ability)) {
+                    movingPiece.abilities.push(ability);
+                    console.log('✨ [ABSORPTION] Gained ability:', ability);
+                }
             }
         }
         
@@ -388,8 +393,16 @@ function applyMoveToBoard(board, move) {
         board[from[0]][from[1]] = null;
     }
     
+    let newEnPassantTarget = null;
+    if (movingPiece.type === 'pawn' && Math.abs(to[0] - from[0]) === 2) {
+        // Pawn double push, set en passant target
+        const direction = movingPiece.color === 'white' ? 1 : -1;
+        newEnPassantTarget = [to[0] + direction, to[1]];
+        console.log('🎯 [EN PASSANT] New target set at:', newEnPassantTarget);
+    }
+    
     console.log('✅ [MOVE] Move applied successfully');
-    return { success: true, capturedPiece };
+    return { success: true, capturedPiece, enPassantTarget: newEnPassantTarget };
 }
 
 /**

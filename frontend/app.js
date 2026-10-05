@@ -1183,13 +1183,47 @@ class ChessApp {
                 
                 this.clearPromotionModal();
                 
-                // Apply the promotion move
-                const success = await this.applyLocalMove(promotionMove);
-                if (success && this.bot) {
-                    // Notify bot of player move
-                    await this.bot.onPlayerMove(promotionMove);
-                    // After player move, trigger bot move
-                    this.handleNextTurn();
+                // Apply the promotion move like a normal player move
+                const moveResult = applyPlayerMove(
+                    this.gameState.board, 
+                    promotionMove.from, 
+                    promotionMove.to, 
+                    promotionMove.flags || 0
+                );
+                
+                if (moveResult.success) {
+                    this.gameState.current_turn = this.gameState.current_turn === 'white' ? 'black' : 'white';
+                    this.addMoveToHistory(promotionMove);
+                    this.lastMoveHighlight = { from: promotionMove.from, to: promotionMove.to };
+                    
+                    // Show absorption feedback
+                    if (moveResult.capturedPiece) {
+                        console.log('🎉 [ABSORPTION] Player captured piece on promotion with abilities:', moveResult.capturedPiece.abilities);
+                        // If king was captured, end game immediately
+                        if (moveResult.capturedPiece.type === 'king') {
+                            console.log('👑 [GAME END] King captured on promotion!');
+                            this.gameState.gameOver = true;
+                            this.gameState.game_over = true;
+                            this.gameState.winner = moveResult.capturedPiece.color === 'white' ? 'black' : 'white';
+                            this.gameState.reason = 'checkmate';
+                            this.renderChessBoard();
+                            this.handleBotGameOver('checkmate');
+                            return;
+                        }
+                    }
+
+                    this.renderChessBoard();
+                    this.updateCurrentTurn();
+                    await this.updateCheckStatus();
+                    this.renderChessBoard();
+                    
+                    // Check game end conditions
+                    await this.checkGameEndConditions();
+                    
+                    if (this.bot && !this.gameState.game_over && !this.gameState.gameOver) {
+                        // After player move, trigger bot move exactly once
+                        this.handleNextTurn();
+                    }
                 }
             });
         });
@@ -1588,6 +1622,13 @@ class ChessApp {
         if (this.lastMoveHighlight) {
             this.restoreLastMoveHighlighting();
         }
+        
+        // Disable interactions if game is over
+        if (this.gameState && (this.gameState.game_over || this.gameState.gameOver)) {
+            document.querySelectorAll('.chess-square').forEach(square => {
+                square.style.pointerEvents = 'none';
+            });
+        }
     }
     
     restoreLastMoveHighlighting() {
@@ -1737,6 +1778,10 @@ class ChessApp {
     }
     
     handleSquareClick(row, col) {
+        if (this.gameState && (this.gameState.game_over || this.gameState.gameOver)) {
+            return;
+        }
+        
         // Always check if it's the current player's turn first
         if (!this.isCurrentPlayerTurn()) {
             console.log("Not your turn!");
@@ -1771,7 +1816,7 @@ class ChessApp {
     }
     
     isCurrentPlayerTurn() {
-        if (!this.gameState) return false;
+        if (!this.gameState || this.gameState.game_over || this.gameState.gameOver) return false;
         // Check if current turn matches the player's color
         // This assumes we know which player we are - we'll need to track this
         return this.gameState.current_turn === this.playerColor;
@@ -1853,9 +1898,23 @@ class ChessApp {
             });
             this.lastMoveHighlight = { from: [from.row, from.col], to: [to.row, to.col] };
             
+            // Update en passant target
+            this.gameState.en_passant_target = moveResult.enPassantTarget || null;
+            
             // Show absorption feedback
             if (moveResult.capturedPiece) {
                 console.log('🎉 [ABSORPTION] Player captured piece with abilities:', moveResult.capturedPiece.abilities);
+                // If king was captured, end game immediately
+                if (moveResult.capturedPiece.type === 'king') {
+                    console.log('👑 [GAME END] King captured!');
+                    this.gameState.gameOver = true;
+                    this.gameState.game_over = true;
+                    this.gameState.winner = moveResult.capturedPiece.color === 'white' ? 'black' : 'white';
+                    this.gameState.reason = 'checkmate';
+                    this.renderChessBoard();
+                    this.handleBotGameOver('checkmate');
+                    return true;
+                }
             }
             
             // Redraw and update UI
@@ -1864,22 +1923,12 @@ class ChessApp {
             await this.updateCheckStatus();
             this.renderChessBoard();
             
-            // Notify bot of player move
-            if (this.bot) {
-                const moveForBot = {
-                    from: [from.row, from.col],
-                    to: [to.row, to.col],
-                    flags: to.flags || 0
-                };
-                await this.bot.onPlayerMove(moveForBot);
-            }
-            
-            // Check for game end conditions
+            // Check for game end conditions (checkmate/stalemate)
             await this.checkGameEndConditions();
             
-            // Handle next turn (bot's turn)
+            // If game is not over, trigger bot's turn
             if (!this.gameState.game_over && !this.gameState.gameOver) {
-                await this.handleNextTurn();
+                this.handleNextTurn();
             }
             
             return true;
@@ -1904,9 +1953,9 @@ class ChessApp {
             
             // Only check if the current player's king is in check
             // (after a move, only the current player's king can be in check)
-            const isCurrentPlayerInCheck = await this.bot.engine.isInCheck(
-                this.gameState.board,
-                this.gameState
+            const isCurrentPlayerInCheck = this.isKingInCheckJS(
+                this.gameState.current_turn,
+                this.gameState.board
             );
             
             if (this.gameState.current_turn === 'white') {
@@ -1930,7 +1979,7 @@ class ChessApp {
         //console.log('🔄 [TURN HANDLER] isBotGame:', this.isBotGame, 'game_over:', this.gameState.game_over);
         //console.log('🔄 [TURN HANDLER] playerColor:', this.playerColor);
         
-        if (this.isBotGame && !this.gameState.game_over) {
+        if (this.isBotGame && !this.gameState.game_over && !this.gameState.gameOver) {
             const isPlayerTurn = this.gameState.current_turn === this.playerColor;
             //console.log('🔄 [TURN HANDLER] isPlayerTurn:', isPlayerTurn);
             
@@ -1953,7 +2002,7 @@ class ChessApp {
      */
     async makeBotMove() {
         try {
-            if (!this.bot || this.gameState.game_over) {
+            if (!this.bot || this.gameState.game_over || this.gameState.gameOver) {
                 return;
             }
             
@@ -1973,9 +2022,8 @@ class ChessApp {
             console.error('Error making bot move:', error);
         }
     }
-
     /**
-     * Apply move locally for bot games
+     * Apply move locally for bot games (used by bot.js for bot moves)
      */
     async applyLocalMove(move) {
         try {
@@ -1996,45 +2044,43 @@ class ChessApp {
 
             if (moveResult.success) {
                 // Update game state
-                //console.log('🔄 [TURN] Before turn switch - current_turn:', this.gameState.current_turn);
                 this.gameState.current_turn = this.gameState.current_turn === 'white' ? 'black' : 'white';
-                //console.log('🔄 [TURN] After turn switch - current_turn:', this.gameState.current_turn);
                 
                 // Update move history
                 this.addMoveToHistory(move);
                 
-                // Set last move highlighting (like in PvP)
+                // Set last move highlighting
                 this.lastMoveHighlight = { from: move.from, to: move.to };
                 
-                // Show absorption feedback
+                // Update en passant target
+                this.gameState.en_passant_target = moveResult.enPassantTarget || null;
+                
+                // Check for king capture — end game immediately
                 if (moveResult.capturedPiece) {
-                   // console.log('🎉 [ABSORPTION] Piece absorbed with abilities:', moveResult.capturedPiece.abilities);
+                   if (moveResult.capturedPiece.type === 'king') {
+                        console.log('👑 [GAME END] King captured!');
+                        this.gameState.gameOver = true;
+                        this.gameState.game_over = true;
+                        this.gameState.winner = moveResult.capturedPiece.color === 'white' ? 'black' : 'white';
+                        this.gameState.reason = 'checkmate';
+                        this.renderChessBoard();
+                        this.handleBotGameOver('checkmate');
+                        return true;
+                   }
                 }
                 
                 // Redraw board
                 this.renderChessBoard();
                 this.updateCurrentTurn();
                 
-                // Update check status for both players (like in PvP)
+                // Update check status
                 await this.updateCheckStatus();
-                
-                // Re-render board to show check highlighting
                 this.renderChessBoard();
                 
-                // Check for game end conditions
-                //console.log('🔄 [MOVE] About to check game end conditions...');
+                // Check for checkmate/stalemate
                 await this.checkGameEndConditions();
-                // console.log('🔄 [TURN] After checkGameEndConditions - current_turn:', this.gameState.current_turn);
                 
-                // If game is not over, handle next turn
-                if (!this.gameState.game_over && !this.gameState.gameOver) {
-                    //console.log('🔄 [MOVE] Game continues, calling handleNextTurn...');
-                    await this.handleNextTurn();
-                } else {
-                    //console.log('🏁 [MOVE] Game is over, not calling handleNextTurn');
-                }
-                
-                //console.log('✅ Move applied successfully');
+                // Note: do NOT call handleNextTurn here — the caller (bot.js) handles its own turn logic
                 return true;
             } else {
                 console.log('❌ Failed to apply move');
@@ -2071,62 +2117,128 @@ class ChessApp {
     /**
      * Check for game end conditions
      */
+
+    // --- JS Fallback Checkmate Logic ---
+    isKingInCheckJS(color, board) {
+        let kingPos = null;
+        for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+                const p = board[r][c];
+                if (p && p.type === 'king' && p.color === color) {
+                    kingPos = {row: r, col: c};
+                    break;
+                }
+            }
+            if (kingPos) break;
+        }
+        if (!kingPos) return false;
+        
+        const oppColor = color === 'white' ? 'black' : 'white';
+        for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+                const p = board[r][c];
+                if (p && p.color === oppColor) {
+                    // Temporarily set board to avoid modifying global state if calculatePossibleMoves uses it
+                    const oldBoard = this.gameState.board;
+                    this.gameState.board = board;
+                    const moves = this.calculatePossibleMoves(p, r, c);
+                    this.gameState.board = oldBoard;
+                    
+                    for (const m of moves) {
+                        if (m.row === kingPos.row && m.col === kingPos.col) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+    
+    cloneBoard(board) {
+        return board.map(row => row.map(p => p ? {...p, abilities: [...p.abilities]} : null));
+    }
+    
+    hasLegalMovesJS(color) {
+        for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+                const p = this.gameState.board[r][c];
+                if (p && p.color === color) {
+                    const pseudoMoves = this.calculatePossibleMoves(p, r, c);
+                    for (const m of pseudoMoves) {
+                        // Simulate move
+                        const clonedBoard = this.cloneBoard(this.gameState.board);
+                        const captured = clonedBoard[m.row][m.col];
+                        clonedBoard[m.row][m.col] = clonedBoard[r][c];
+                        clonedBoard[r][c] = null;
+                        
+                        // Handle en passant capture in simulation
+                        if (clonedBoard[m.row][m.col].abilities.includes('pawn') && 
+                            this.gameState.en_passant_target && 
+                            m.row === this.gameState.en_passant_target[0] && 
+                            m.col === this.gameState.en_passant_target[1]) {
+                            const epRow = m.row + (color === 'white' ? 1 : -1);
+                            clonedBoard[epRow][m.col] = null;
+                        }
+                        
+                        // Handle castling rook move in simulation
+                        if (clonedBoard[m.row][m.col].type === 'king' && Math.abs(m.col - c) === 2) {
+                            const direction = m.col > c ? 1 : -1;
+                            const rookCol = direction === 1 ? 7 : 0;
+                            const newRookCol = m.col - direction;
+                            const rook = clonedBoard[r][rookCol];
+                            if (rook) {
+                                clonedBoard[r][newRookCol] = rook;
+                                clonedBoard[r][rookCol] = null;
+                            }
+                        }
+                        
+                        if (clonedBoard[m.row][m.col].type === 'king') {
+                            clonedBoard[m.row][m.col].hasMoved = true;
+                        }
+                        
+                        // Check if king is safe
+                        if (!this.isKingInCheckJS(color, clonedBoard)) {
+                            return true; // Found at least one legal move
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+    // ------------------------------------
+
     async checkGameEndConditions() {
         try {
-            if (!this.bot || !this.bot.engine) {
-                console.log('❌ [GAME END] No bot or engine available');
+            if (this.gameState.game_over || this.gameState.gameOver) {
                 return;
             }
 
-            //console.log('🔍 [GAME END] Checking game end conditions for', this.gameState.current_turn);
+            const currentColor = this.gameState.current_turn;
+            console.log('🔍 [GAME END] Checking game end for', currentColor);
 
-            // Get legal moves for current player
-            let legalMoves;
-            try {
-                legalMoves = await this.bot.engine.getLegalMoves(
-                    this.gameState.board, 
-                    this.gameState
-                );
-                //console.log('🔍 [GAME END] Legal moves retrieved successfully:', Object.keys(legalMoves).length, 'pieces with moves');
-            } catch (error) {
-                console.error('❌ [GAME END] Failed to get legal moves:', error);
-                console.log('🔄 [GAME END] Skipping game end check due to engine error');
-                return; // Don't end game if we can't get legal moves
-            }
+            // Use pure JS logic — the WASM engine doesn't understand absorbed abilities
+            const hasLegal = this.hasLegalMovesJS(currentColor);
 
-            const hasLegalMoves = Object.keys(legalMoves).length > 0;
+            if (!hasLegal) {
+                const isInCheck = this.isKingInCheckJS(currentColor, this.gameState.board);
+                console.log('🚨 [GAME END] No legal moves! inCheck:', isInCheck);
 
-            if (!hasLegalMoves) {
-                console.log('🚨 [GAME END] No legal moves found! Checking for checkmate vs stalemate...');
-                
-                // No legal moves - check if it's checkmate or stalemate
-                const isInCheck = await this.bot.engine.isInCheck(
-                    this.gameState.board, 
-                    this.gameState
-                );
-
-                console.log('🔍 [GAME END] Is in check:', isInCheck);
+                this.gameState.gameOver = true;
+                this.gameState.game_over = true;
 
                 if (isInCheck) {
-                    // Checkmate
                     console.log('♛ [GAME END] CHECKMATE!');
-                    this.gameState.gameOver = true;
-                    this.gameState.game_over = true;  // Keep both for compatibility
-                    this.gameState.winner = this.gameState.current_turn === 'white' ? 'black' : 'white';
+                    this.gameState.winner = currentColor === 'white' ? 'black' : 'white';
                     this.gameState.reason = 'checkmate';
                     this.handleBotGameOver('checkmate');
                 } else {
-                    // Stalemate
                     console.log('🤝 [GAME END] STALEMATE!');
-                    this.gameState.gameOver = true;
-                    this.gameState.game_over = true;  // Keep both for compatibility
                     this.gameState.winner = null;
                     this.gameState.reason = 'stalemate';
                     this.handleBotGameOver('stalemate');
                 }
-            } else {
-                //console.log('✅ [GAME END] Game continues - found legal moves');
-                // Note: Do NOT call handleNextTurn here as it's already handled by the move application flow
             }
         } catch (error) {
             console.error('Error checking game end conditions:', error);
@@ -2199,7 +2311,51 @@ class ChessApp {
             this.allValidMoves = new Map();
 
             for (const [position, moves] of Object.entries(legalMoves)) {
-                this.allValidMoves.set(position, moves.map(move => {
+                // Filter out moves that leave our king in check using JS logic
+                const validMovesForPiece = moves.filter(move => {
+                    const toRow = Array.isArray(move) ? move[0] : move.to[0];
+                    const toCol = Array.isArray(move) ? move[1] : move.to[1];
+                    const fromRow = parseInt(position.split(',')[0]);
+                    const fromCol = parseInt(position.split(',')[1]);
+                    
+                    const clonedBoard = this.cloneBoard(this.gameState.board);
+                    
+                    // Simulate special moves in filtering
+                    const movingPiece = clonedBoard[fromRow][fromCol];
+                    const toMoveInfo = Array.isArray(move) ? {row: move[0], col: move[1]} : {row: move.to[0], col: move.to[1]};
+                    const toRowStr = toMoveInfo.row;
+                    const toColStr = toMoveInfo.col;
+                    
+                    clonedBoard[toRowStr][toColStr] = movingPiece;
+                    clonedBoard[fromRow][fromCol] = null;
+                    
+                    if (movingPiece) {
+                        // En passant capture
+                        if (movingPiece.abilities.includes('pawn') && 
+                            this.gameState.en_passant_target && 
+                            toRowStr === this.gameState.en_passant_target[0] && 
+                            toColStr === this.gameState.en_passant_target[1]) {
+                            const epRow = toRowStr + (movingPiece.color === 'white' ? 1 : -1);
+                            clonedBoard[epRow][toColStr] = null;
+                        }
+                        
+                        // Castling rook move
+                        if (movingPiece.type === 'king' && Math.abs(toColStr - fromCol) === 2) {
+                            const direction = toColStr > fromCol ? 1 : -1;
+                            const rookCol = direction === 1 ? 7 : 0;
+                            const newRookCol = toColStr - direction;
+                            const rook = clonedBoard[fromRow][rookCol];
+                            if (rook) {
+                                clonedBoard[fromRow][newRookCol] = rook;
+                                clonedBoard[fromRow][rookCol] = null;
+                            }
+                        }
+                    }
+                    
+                    return !this.isKingInCheckJS(this.gameState.current_turn, clonedBoard);
+                });
+                
+                this.allValidMoves.set(position, validMovesForPiece.map(move => {
                     // Handle both old format [row, col] and new format {to: [row, col], flags: flags}
                     if (Array.isArray(move)) {
                         // Old format: [row, col]

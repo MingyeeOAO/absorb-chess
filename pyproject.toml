@@ -1,0 +1,11 @@
+[project]
+name = "absorb-chess"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "requests>=2.34.2",
+    "sympy>=1.14.0",
+    "websockets>=17.1",
+]

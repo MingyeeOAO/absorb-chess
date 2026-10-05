@@ -109,7 +109,8 @@ class ChessBot {
      * Make bot move
      */
     async makeBotMove() {
-        if (!this.gameActive || this.isThinking || this.app.gameState.current_turn !== this.botColor) {
+        if (!this.gameActive || this.isThinking || this.app.gameState.current_turn !== this.botColor
+            || this.app.gameState.game_over || this.app.gameState.gameOver) {
             console.log('🚫 [BOT] Not making move:', {
                 gameActive: this.gameActive,
                 isThinking: this.isThinking,
@@ -195,7 +196,8 @@ class ChessBot {
      */
     checkGameEnd() {
         // Use app's existing game end detection
-        if (this.app.gameState.gameOver) {
+        if (this.app.gameState.gameOver || this.app.gameState.game_over) {
+            this.gameActive = false;
             const winner = this.app.gameState.winner;
             let message = '';
             

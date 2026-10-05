@@ -1,6 +1,5 @@
 from typing import Dict, List, Optional, Tuple
 
-from sympy import PoleError
 from .enums import PieceType, Color
 from .piece import Piece
 import datetime
@@ -76,11 +75,24 @@ class ChessGame:
                 captured = self.board[to_row][to_col]
                 self.board[to_row][to_col] = piece
                 self.board[row][col] = None
+
+                ep_cap = None
+                if PieceType.PAWN in piece.abilities and self.en_passant_target and (to_row, to_col) == self.en_passant_target:
+                    ep_row = to_row + (1 if piece.color == Color.WHITE else -1)
+                    ep_cap = self.board[ep_row][to_col]
+                    if ep_cap:
+                        self.board[ep_row][to_col] = None
+
                 orig_pos = piece.position
                 piece.position = (to_row, to_col)
-                king_check = self._is_king_in_check(piece.color, king_pos)
+                
+                test_king_pos = (to_row, to_col) if piece.type == PieceType.KING else king_pos
+                king_check = self._is_king_in_check(piece.color, test_king_pos)
+                
                 self.board[row][col] = piece
                 self.board[to_row][to_col] = captured
+                if ep_cap:
+                    self.board[ep_row][to_col] = ep_cap
                 piece.position = orig_pos
                 if not king_check:
                     valid_moves.append((to_row, to_col))
@@ -97,6 +109,14 @@ class ChessGame:
         captured_piece = self.get_piece_at(to_row, to_col)
         self.board[to_row][to_col] = piece
         self.board[from_row][from_col] = None
+        
+        en_passant_captured = None
+        if PieceType.PAWN in piece.abilities and self.en_passant_target and to_pos == self.en_passant_target:
+            ep_row = to_row + (1 if piece.color == Color.WHITE else -1)
+            en_passant_captured = self.board[ep_row][to_col]
+            if en_passant_captured:
+                self.board[ep_row][to_col] = None
+
         original_position = piece.position
         piece.position = (to_row, to_col)
         
@@ -106,6 +126,8 @@ class ChessGame:
         # Revert the move
         self.board[from_row][from_col] = piece
         self.board[to_row][to_col] = captured_piece
+        if en_passant_captured:
+            self.board[ep_row][to_col] = en_passant_captured
         piece.position = original_position
         
         return king_in_check
@@ -158,12 +180,22 @@ class ChessGame:
         captured_piece = self.get_piece_at(to_row, to_col)
         self.board[to_row][to_col] = piece
         self.board[from_row][from_col] = None
+
+        en_passant_captured = None
+        if PieceType.PAWN in piece.abilities and self.en_passant_target and to_pos == self.en_passant_target:
+            ep_row = to_row + (1 if piece.color == Color.WHITE else -1)
+            en_passant_captured = self.board[ep_row][to_col]
+            if en_passant_captured:
+                self.board[ep_row][to_col] = None
+
         original_position = piece.position
         piece.position = (to_row, to_col)
         king_in_check = self._is_king_in_check(piece.color)
         # Revert
         self.board[from_row][from_col] = piece
         self.board[to_row][to_col] = captured_piece
+        if en_passant_captured:
+            self.board[ep_row][to_col] = en_passant_captured
         piece.position = original_position
         if king_in_check:
             return False
@@ -196,7 +228,7 @@ class ChessGame:
 
         # En passant
         self.valid_moves.clear()
-        if (piece.type == PieceType.PAWN and self.en_passant_target and to_pos == self.en_passant_target):
+        if (PieceType.PAWN in piece.abilities and self.en_passant_target and to_pos == self.en_passant_target):
             en_passant_row = to_row + (1 if piece.color == Color.WHITE else -1)
             en_passant_captured = self.get_piece_at(en_passant_row, to_col)
             if en_passant_captured:
@@ -236,12 +268,14 @@ class ChessGame:
             move_record['final_piece'] = None
         self.move_history.append(move_record)
 
-        # Check for check after the move
-        self._update_check_status()
-
         # Switch turns unless promotion is pending
         if not became_promotion:
             self.current_turn = Color.BLACK if self.current_turn == Color.WHITE else Color.WHITE
+
+            # Check for check/checkmate AFTER switching turns, so _has_legal_moves
+            # evaluates the player who now needs to move (and might be checkmated)
+            self._update_check_status()
+
         return True
    
     def _get_valid_moves_for_ability(self, from_pos, ability = None) -> List[tuple]:
@@ -392,7 +426,7 @@ class ChessGame:
             return False
 
         # Check if move would put own king in check
-        return not self._is_king_in_check(piece.color)
+        return not self._would_move_put_king_in_check(piece, from_pos, to_pos)
 
     # ... (Rest of the movement validation methods from server.py)
     
@@ -520,9 +554,14 @@ class ChessGame:
             if target_piece and target_piece.color == piece.color:
                 return False
             return True
-        # Castling
-        if piece.has_moved or from_row != to_row or abs(to_col - from_col) != 2:
+        # Castling - strictly only for the actual King piece, not pieces that absorbed King ability
+        if piece.type != PieceType.KING or piece.has_moved or from_row != to_row or abs(to_col - from_col) != 2:
             return False
+        
+        # Check if this king has already castled (just an extra safety check)
+        if self.king_castled.get(piece.color, False):
+            return False
+            
         direction = 1 if to_col > from_col else -1
         rook_col = 7 if direction == 1 else 0
         rook = self.get_piece_at(from_row, rook_col)
@@ -539,6 +578,14 @@ class ChessGame:
             if self._square_attacked((from_row, c), piece.color):
                 return False
         return True
+    def _is_square_attacked_by_pawn(self, pawn: Piece, from_pos: tuple, target_pos: tuple) -> bool:
+        """Helper to specifically check if a pawn attacks a square, regardless of whether a piece is there."""
+        from_row, from_col = from_pos
+        target_row, target_col = target_pos
+        direction = -1 if pawn.color == Color.WHITE else 1
+        
+        # Pawn attacks diagonally forward
+        return abs(target_col - from_col) == 1 and target_row == from_row + direction
 
     def _square_attacked(self, pos: tuple, defender_color: Color) -> bool:
         # attacker is the opposite color
@@ -548,12 +595,16 @@ class ChessGame:
             for col in range(8):
                 attacker = self.get_piece_at(row, col)
                 if attacker and attacker.color == attacker_color:
-                    if self._is_valid_move_for_ability(attacker, (row, col), (r, c), attacker.type):
-                        return True
-                    # Also check other abilities if attacker has multiple
+                    # Check all abilities, including base type
                     for ability in attacker.abilities:
-                        if ability != attacker.type and self._is_valid_move_for_ability(attacker, (row, col), (r, c), ability):
-                            return True
+                        if ability == PieceType.PAWN:
+                            # Use explicit pawn attack logic (works on empty squares)
+                            if self._is_square_attacked_by_pawn(attacker, (row, col), (r, c)):
+                                return True
+                        else:
+                            # Other abilities work fine with _is_valid_move_for_ability
+                            if self._is_valid_move_for_ability(attacker, (row, col), (r, c), ability):
+                                return True
         return False
     
     def _has_legal_moves(self, color: Color) -> bool:
@@ -713,54 +764,12 @@ class ChessGame:
         
         return True
 
-    def cancel_promotion(self):
-        if not self.promotion_pending:
-            return False
-        row = self.promotion_pending['row']
-        col = self.promotion_pending['col']
-        from_row, from_col = self.promotion_pending['from']
-        pawn = self.get_piece_at(row, col)
-        # Move the pawn back to original position
-        self.board[from_row][from_col] = pawn
-        self.board[row][col] = None
-        if pawn:
-            pawn.position = (from_row, from_col)
-        self.promotion_pending = None
-        return True
+    # cancel_promotion was removed as it corrupted game state by failing to restore captured pieces, abilities, and history
 
     def is_promotion_pending(self) -> bool:
         """Check if there is a promotion pending"""
         return self.promotion_pending is not None
 
-    def get_board_state(self) -> Dict:
-        board_state = []
-        for row in self.board:
-            row_state = []
-            for piece in row:
-                if piece:
-                    row_state.append({
-                        'type': piece.type.value,
-                        'color': piece.color.value,
-                        'abilities': [ability.value for ability in piece.abilities],
-                        'position': piece.position,
-                        'has_moved': piece.has_moved
-                    })
-                else:
-                    row_state.append(None)
-            board_state.append(row_state)
-        return {
-            'board': board_state,
-            'current_turn': self.current_turn.value,
-            'game_over': self.game_over,
-            'winner': self.winner.value if self.winner else None,
-            'move_history': self.move_history,
-            'white_king_in_check': self.white_king_in_check,
-            'black_king_in_check': self.black_king_in_check,
-            'en_passant_target': self.en_passant_target,
-            'promotion_pending': self.promotion_pending,
-            'promotion_cancel_allowed': True
-        }
-    
     def calculate_moves_fast(self) -> Dict[tuple, list]:
         """High-speed calculation of all legal moves for the current turn."""
         moves = {}
@@ -873,7 +882,13 @@ class ChessGame:
                                     path_clear = False
                                     break
                             if path_clear and not self._is_king_in_check(color, king_pos):
-                                valid_moves.add((row,col+2*side))
+                                passed_safe = True
+                                for c in [col + side, col + 2*side]:
+                                    if self._square_attacked((row, c), color):
+                                        passed_safe = False
+                                        break
+                                if passed_safe:
+                                    valid_moves.add((row,col+2*side))
 
             # Filter moves that leave king in check
             legal_moves = []
@@ -881,13 +896,24 @@ class ChessGame:
                 captured = self.board[to_row][to_col]
                 self.board[to_row][to_col] = piece
                 self.board[row][col] = None
+
+                ep_cap = None
+                if piece.type == PieceType.PAWN and self.en_passant_target and (to_row, to_col) == self.en_passant_target:
+                    ep_row = to_row + (1 if color == Color.WHITE else -1)
+                    ep_cap = self.board[ep_row][to_col]
+                    if ep_cap:
+                        self.board[ep_row][to_col] = None
+
                 orig_pos = piece.position
                 piece.position = (to_row, to_col)
 
-                king_safe = not self._is_king_in_check(color, king_pos)
+                test_king_pos = (to_row, to_col) if piece.type == PieceType.KING else king_pos
+                king_safe = not self._is_king_in_check(color, test_king_pos)
 
                 self.board[row][col] = piece
                 self.board[to_row][to_col] = captured
+                if ep_cap:
+                    self.board[ep_row][to_col] = ep_cap
                 piece.position = orig_pos
                 if king_safe:
                     legal_moves.append((to_row,to_col))
